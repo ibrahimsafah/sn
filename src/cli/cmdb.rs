@@ -14,8 +14,6 @@ pub enum CmdbSub {
     Create(CmdbCreateArgs),
     /// Update a CI record (PATCH).
     Update(CmdbUpdateArgs),
-    /// Replace a CI record (PUT).
-    Replace(CmdbReplaceArgs),
     /// Get metadata for a CMDB class.
     Meta(CmdbMetaArgs),
     /// Relation operations on a CI.
@@ -56,18 +54,6 @@ pub struct CmdbCreateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbUpdateArgs {
-    pub class: String,
-    pub sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct CmdbReplaceArgs {
     pub class: String,
     pub sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
@@ -170,23 +156,6 @@ pub fn update(global: &GlobalFlags, args: CmdbUpdateArgs) -> Result<()> {
     };
     let body = build_body(body_input)?;
     let resp = client.patch(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
-}
-
-pub fn replace(global: &GlobalFlags, args: CmdbReplaceArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
-    let path = format!("/api/now/cmdb/instance/{}/{}", args.class, args.sys_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
-    let resp = client.put(&path, &[], &body)?;
     let out = unwrap_or_raw(resp, global.output);
     crate::cli::table::write_response(global, &out)
 }

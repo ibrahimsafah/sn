@@ -138,40 +138,23 @@ async fn update_accepts_field_at_file_for_multiline_value() {
     .unwrap();
 }
 
+/// `replace` (PUT) was removed in 0.11.0 after a live instance showed PUT and
+/// PATCH leaving a record in byte-identical states — ServiceNow treats both as
+/// partial updates. Anything that reached for `replace` should use `update`.
 #[tokio::test(flavor = "current_thread")]
-async fn replace_sends_put_with_full_body() {
-    let server = wiremock::MockServer::start().await;
-    Mock::given(method("PUT"))
-        .and(path("/api/now/table/incident/abc"))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"result": {"sys_id": "abc"}})),
-        )
-        .mount(&server)
-        .await;
-    let server_uri = server.uri();
-    tokio::task::spawn_blocking(move || {
-        let tmp = common::write_profiles(
-            "test",
-            &[common::ProfileSpec {
-                name: "test",
-                instance: &server_uri,
-                username: "u",
-                password: "p",
-            }],
-        );
-        let mut cmd = common::sn_cmd(tmp.path());
-        cmd.args([
-            "--compact",
-            "table",
-            "replace",
-            "incident",
-            "abc",
-            "--data",
-            r#"{"number":"INC1"}"#,
-        ])
+async fn replace_is_no_longer_a_subcommand() {
+    let tmp = common::write_profiles(
+        "test",
+        &[common::ProfileSpec {
+            name: "test",
+            instance: "https://example.invalid",
+            username: "u",
+            password: "p",
+        }],
+    );
+    let mut cmd = common::sn_cmd(tmp.path());
+    cmd.args(["table", "replace", "incident", "abc", "--data", "{}"])
         .assert()
-        .success();
-    })
-    .await
-    .unwrap();
+        .failure()
+        .code(1);
 }

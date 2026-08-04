@@ -24,8 +24,6 @@ pub enum TableSub {
     Create(TableCreateArgs),
     #[command(about = "Patch a record (partial update)")]
     Update(TableUpdateArgs),
-    #[command(about = "Replace a record (PUT, full overwrite)")]
-    Replace(TableReplaceArgs),
     #[command(about = "Delete a record")]
     Delete(TableDeleteArgs),
 }
@@ -143,32 +141,6 @@ pub struct TableCreateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct TableUpdateArgs {
-    pub table: String,
-    pub sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
-    #[arg(long, short = 'f', alias = "sysparm-fields")]
-    pub fields: Option<String>,
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
-    pub display_value: Option<DisplayValueArg>,
-    #[arg(long, alias = "sysparm-exclude-reference-link")]
-    pub exclude_reference_link: bool,
-    #[arg(long, alias = "sysparm-input-display-value")]
-    pub input_display_value: bool,
-    #[arg(long, alias = "sysparm-suppress-auto-sys-field")]
-    pub suppress_auto_sys_field: bool,
-    #[arg(long, alias = "sysparm-view")]
-    pub view: Option<String>,
-    #[arg(long, alias = "sysparm-query-no-domain")]
-    pub query_no_domain: bool,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct TableReplaceArgs {
     pub table: String,
     pub sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
@@ -403,31 +375,7 @@ pub fn update(global: &GlobalFlags, args: TableUpdateArgs) -> Result<()> {
         args.suppress_auto_sys_field,
         args.view,
         args.query_no_domain,
-        HttpMutation::Patch,
     )
-}
-
-pub fn replace(global: &GlobalFlags, args: TableReplaceArgs) -> Result<()> {
-    write_op(
-        global,
-        args.table,
-        args.sys_id,
-        args.data,
-        args.field,
-        args.fields,
-        args.display_value,
-        args.exclude_reference_link,
-        args.input_display_value,
-        args.suppress_auto_sys_field,
-        args.view,
-        args.query_no_domain,
-        HttpMutation::Put,
-    )
-}
-
-enum HttpMutation {
-    Patch,
-    Put,
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -444,7 +392,6 @@ fn write_op(
     suppress_auto_sys_field: bool,
     view: Option<String>,
     query_no_domain: bool,
-    mutation: HttpMutation,
 ) -> Result<()> {
     let body_input = match (data, field.is_empty()) {
         (Some(d), true) => BodyInput::Data(d),
@@ -469,10 +416,7 @@ fn write_op(
         query_no_domain: bool_opt(query_no_domain),
     };
     let path = format!("/api/now/table/{}/{}", table, sys_id);
-    let resp = match mutation {
-        HttpMutation::Patch => client.patch(&path, &q.to_pairs(), &body)?,
-        HttpMutation::Put => client.put(&path, &q.to_pairs(), &body)?,
-    };
+    let resp = client.patch(&path, &q.to_pairs(), &body)?;
     let out = unwrap_or_raw(resp, global.output);
     crate::cli::table::write_response(global, &out)
 }

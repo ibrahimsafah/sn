@@ -83,7 +83,6 @@ sn table get incident <sys_id> --display-value all     # human-readable choice/r
 sn table create incident --field short_description="x" --field urgency=2
 sn table create incident --data @body.json             # or --data '{"key":"val"}'
 sn table update incident <sys_id> --field state=6      # PATCH (partial)
-sn table replace incident <sys_id> --data @full.json   # PUT (SN still partial-updates — omitted fields keep values)
 sn table delete incident <sys_id> --yes                # --yes required on non-TTY, else clean JSON error exit 1
 ```
 
@@ -206,7 +205,6 @@ sn cmdb get cmdb_ci_server <sys_id>       # ⚠️ CI fields nest under .attribu
                                           #    inbound_relations, outbound_relations}.
 sn cmdb create cmdb_ci_server --field name=web-01 --field ip_address=10.0.1.1
 sn cmdb update cmdb_ci_server <sys_id> --field operational_status=2
-sn cmdb replace cmdb_ci_server <sys_id> --data @ci.json     # PUT (also a partial update)
 sn cmdb meta cmdb_ci_server
 sn cmdb relation add cmdb_ci_server <sys_id> --data '{"outbound_relations":[{"type":"<cmdb_rel_type_sys_id>","target":"<target_ci_sys_id>"}]}'
 sn cmdb relation delete cmdb_ci_server <sys_id> <rel_sys_id> --yes

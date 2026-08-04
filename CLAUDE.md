@@ -43,7 +43,7 @@ src/
     init.rs         → sn init (onboarding wizard: profile setup + verification, and ALWAYS claims default_profile); a thin policy layer over profile.rs's core
     auth.rs         → sn auth login/logout/status/refresh (OAuth session commands; login runs the flow for a configured oauth profile, no config mutation) + whoami (authenticated-identity read, shared with profile.rs)
     profile.rs      → sn profile add/list/show/remove/use + the shared profile-writing core (ProfileInput, resolve_name/resolve_input, save_and_verify) used by both `add` and `init`
-    table.rs        → sn table list/get/create/update/replace/delete + shared helpers
+    table.rs        → sn table list/get/create/update/delete + shared helpers
     watch.rs        → sn watch table/count/activity/channel (live record watchers; streams JSONL)
     schema.rs       → sn schema tables/columns/choices (undocumented SN endpoints)
     introspect.rs   → sn introspect (dumps clap command tree as JSON)
@@ -55,7 +55,7 @@ src/
     scores.rs       → sn scores list/favorite/unfavorite (Performance Analytics)
     change.rs       → sn change list/get/create/update/delete + task/ci/conflict/nextstates/approvals/risk/schedule/models/templates
     attachment.rs   → sn attachment list/get/upload/download/delete (binary)
-    cmdb.rs         → sn cmdb list/get/create/update/replace/meta + relation add/delete
+    cmdb.rs         → sn cmdb list/get/create/update/meta + relation add/delete
     import.rs       → sn import create/bulk/get (staging-table imports)
     catalog.rs      → sn catalog list/get/categories/items/order/cart/checkout/wishlist
     identify.rs     → sn identify create-update/query + enhanced variants (CI reconciliation)
@@ -190,7 +190,7 @@ Resolved by `config::config_dir()`. A non-empty `SN_CONFIG_DIR` is used as-is �
 ## Conventions
 
 - Every `sysparm_*` parameter has a friendly flag (e.g. `--query`) and a raw alias (`--sysparm-query`) mapping to the same field, via clap's `alias` attribute in `cli/mod.rs`.
-- `update` = PATCH, `replace` = PUT — different HTTP methods, but ServiceNow treats both as partial updates (PUT does not blank omitted fields); clear a field by setting it explicitly.
+- `update` = PATCH, and it is the *only* write verb. `replace` (PUT) was removed in 0.11.0: measured on a live instance, PUT and PATCH left a record byte-identical, because ServiceNow treats both as partial updates — PUT does not blank omitted fields. Clear a field by setting it explicitly. Don't reintroduce a PUT verb without re-measuring; the redundancy is a ServiceNow behavior, not a CLI choice.
 - Shared `pub(crate)` helpers live in `cli/table.rs`: `build_profile`, `build_client`, `bool_opt`, `format_from_flags`, `unwrap_or_raw`, `write_response`.
 - Every command's final emission goes through `cli::table::write_response(global, &value)`, which routes to `output::emit_value` (JSON, default/raw) or `output_table::write_table` (`--output table`). `unwrap_or_raw` treats `Table` like `Default` (envelope unwrapped, then rendered).
 

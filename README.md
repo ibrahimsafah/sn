@@ -208,7 +208,7 @@ sn table get incident <sys_id> --display-value all
 
 ### Writing records
 
-`create`, `update`, and `replace` take either `--data` (`-D`) or `--field` (`-F`), mutually exclusive:
+`create` and `update` take either `--data` (`-D`) or `--field` (`-F`), mutually exclusive:
 
 - `--data` / `-D '<json>'` — inline JSON object (`@file.json` reads a file, `@-` reads stdin)
 - `--field` / `-F key=value` — repeatable key/value pairs (`key=@file` reads the value from a file)
@@ -219,10 +219,10 @@ sn table create incident --field short_description="Disk full on prod-db-01" --f
 sn table create incident --data '{"short_description":"Server down","priority":"1"}'
 echo '{"short_description":"from pipe"}' | sn table create incident --data @-
 
-# update = PATCH, replace = PUT — separate verbs, but ServiceNow treats both as partial updates:
-# PUT does not blank omitted fields. To clear one, set it explicitly (e.g. --field description="").
+# update = PATCH, and it is a partial update: omitted fields keep their values.
+# To clear one, set it explicitly (e.g. --field description="").
 sn table update incident <sys_id> --field state=2
-sn table replace incident <sys_id> --data @full-record.json
+sn table update incident <sys_id> --data @record.json
 
 # Delete
 sn table delete incident <sys_id> --yes
@@ -372,7 +372,6 @@ sn cmdb list cmdb_ci_server --query "operational_status=1" --setlimit 20
 sn cmdb get cmdb_ci_server <sys_id>                                     # includes relations
 sn cmdb create cmdb_ci_server --field name=web-server-01 --field ip_address=10.0.1.50
 sn cmdb update cmdb_ci_server <sys_id> --field operational_status=2     # PATCH
-sn cmdb replace cmdb_ci_server <sys_id> --data @ci.json                 # PUT
 sn cmdb meta cmdb_ci_server                                             # class schema
 
 # Relations
@@ -550,7 +549,7 @@ sn introspect | jq '.subcommands[] | {name, about}'
 Commands emit JSON on stdout by a few consistent rules:
 
 - `list` / `schema tables` / `columns` / `choices` → a JSON array (JSONL with `--all`).
-- `get` / `create` / `update` / `replace` → the single record object (`cmdb get` includes relations).
+- `get` / `create` / `update` → the single record object (`cmdb get` includes relations).
 - `delete` → nothing.
 - `aggregate` → a stats object; `scores` → scorecard records.
 - Async CICD (`app`, `updateset`, `atf run`, `progress`) → a progress object carrying `status` — a numeric **string**, not a word: `"0"` pending, `"1"` running, `"2"` successful, `"3"` failed, `"4"` cancelled — alongside `status_message`, `percent_complete`, and the operation's id at `links.progress.id`.

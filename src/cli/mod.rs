@@ -45,7 +45,7 @@ pub use change::{
 };
 pub use cmdb::{
     CmdbCreateArgs, CmdbGetArgs, CmdbListArgs, CmdbMetaArgs, CmdbRelationAddArgs,
-    CmdbRelationDeleteArgs, CmdbRelationSub, CmdbReplaceArgs, CmdbSub, CmdbUpdateArgs,
+    CmdbRelationDeleteArgs, CmdbRelationSub, CmdbSub, CmdbUpdateArgs,
 };
 pub use completion::{CompletionArgs, Shell as CompletionShell};
 pub use identify::{IdentifyArgs, IdentifyEnhancedArgs, IdentifySub};
@@ -58,8 +58,8 @@ pub use raw::RawArgs;
 pub use schema::{SchemaChoicesArgs, SchemaColumnsArgs, SchemaSub, SchemaTablesArgs};
 pub use scores::{ScoresFavoriteArgs, ScoresListArgs, ScoresSub, SortBy, SortDir};
 pub use table::{
-    DisplayValueArg, TableCreateArgs, TableDeleteArgs, TableGetArgs, TableListArgs,
-    TableReplaceArgs, TableSub, TableUpdateArgs,
+    DisplayValueArg, TableCreateArgs, TableDeleteArgs, TableGetArgs, TableListArgs, TableSub,
+    TableUpdateArgs,
 };
 pub use update_set::{
     UpdateSetBackOutArgs, UpdateSetCommitMultipleArgs, UpdateSetCreateArgs, UpdateSetIdArg,

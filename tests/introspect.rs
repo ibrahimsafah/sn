@@ -143,12 +143,17 @@ fn args_carry_the_constraints_a_schema_needs() {
     assert_eq!(find_arg(args, "field")["conflicts_with"][0], "data");
     assert_eq!(data["value_name"], "DATA");
 
-    // The three help tiers reach the machine-readable face too.
+    // The three help tiers reach the machine-readable face too. The global tier
+    // lives at the root now, so it is checked there.
     assert_eq!(find_arg(args, "view")["help_heading"], "Advanced options");
-    assert_eq!(find_arg(args, "profile")["help_heading"], "Global options");
     assert!(
         find_arg(args, "table")["help_heading"].is_null(),
         "a command's own working set carries no heading"
+    );
+    let globals = tree["global_args"].as_array().unwrap();
+    assert_eq!(
+        find_arg(globals, "profile")["help_heading"],
+        "Global options"
     );
 }
 
@@ -156,6 +161,56 @@ fn args_carry_the_constraints_a_schema_needs() {
 #[test]
 fn root_carries_the_binary_version() {
     assert_eq!(tree()["version"], env!("CARGO_PKG_VERSION"));
+}
+
+/// clap propagates the globals onto every node, and serializing them there
+/// spent three quarters of the output repeating eleven flags. They live once at
+/// the root now: a command's effective flags are its own `args` plus
+/// `global_args`.
+#[test]
+fn globals_live_once_at_the_root() {
+    let tree = tree();
+    let globals: Vec<&str> = tree["global_args"]
+        .as_array()
+        .expect("root has global_args")
+        .iter()
+        .filter_map(|a| a["name"].as_str())
+        .collect();
+    for expected in ["profile", "output", "pretty", "timeout", "insecure"] {
+        assert!(globals.contains(&expected), "global_args lost {expected}");
+    }
+
+    // Keyed on the heading, not the name: `sn init` declares its own
+    // `--profile` ("profile name to create") that shadows the global one, so a
+    // name match would flag a legitimately local argument.
+    let repeated: Vec<String> = nodes(&tree)
+        .into_iter()
+        .filter(|(path, node)| {
+            path != "sn"
+                && node["args"]
+                    .as_array()
+                    .into_iter()
+                    .flatten()
+                    .any(|a| a["help_heading"] == "Global options")
+        })
+        .map(|(path, _)| path)
+        .collect();
+    assert!(
+        repeated.is_empty(),
+        "globals still duplicated onto: {repeated:#?}"
+    );
+
+    // A command's own arguments stay on the command.
+    let own: Vec<&str> = find_sub(find_sub(&tree, "table"), "list")["args"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|a| a["name"].as_str())
+        .collect();
+    assert!(
+        own.contains(&"query"),
+        "table list lost its own args: {own:?}"
+    );
 }
 
 /// `introspect` hardcoded its own formatter, so every global flag it advertised

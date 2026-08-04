@@ -180,9 +180,18 @@ fn every_argument_has_help_text() {
 
 fn walk(cmd: &Value, path: &mut Vec<String>, out: &mut Vec<String>) {
     path.push(cmd["name"].as_str().unwrap_or_default().to_string());
-    for arg in cmd["args"].as_array().into_iter().flatten() {
+    // The globals live once at the root as `global_args`, not on every node, so
+    // checking `args` alone would quietly stop covering eleven flags. Only the
+    // root has the key; elsewhere it is null and yields nothing.
+    for arg in cmd["args"]
+        .as_array()
+        .into_iter()
+        .flatten()
+        .chain(cmd["global_args"].as_array().into_iter().flatten())
+    {
         let name = arg["name"].as_str().unwrap_or_default();
-        // clap generates these two; their help text is not ours to set.
+        // clap generates these two. `introspect` drops them now, so this only
+        // guards against them coming back.
         if matches!(name, "help" | "version") {
             continue;
         }

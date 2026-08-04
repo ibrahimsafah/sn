@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Breaking changes
+
+- **`sn introspect` emits the global flags once at the root, not on every command.** The
+  root gains `global_args`; each node's `args` now holds only that command's own
+  arguments. **A command's effective flags are its own `args` plus the root's
+  `global_args`** — non-global arguments do not propagate, so there is no ancestor chain
+  to walk. Anything generating per-command schemas needs to union the two.
+
+  clap propagates the 11 globals onto every node, and serializing them there was 1,480 of
+  1,852 argument entries — three quarters of the output. Together with the phantom-node
+  fix below, the tree drops from 481 KB to 129 KB.
+
 ### Added
 
 - **`sn introspect` emits the constraints a schema generator needs.** Each `args[]` entry

@@ -16,7 +16,7 @@ Install: `brew install tehubersheezy/sn/sn` or https://github.com/tehubersheezy/
 sn profile add prod --instance X --username Y --password-stdin < secret.txt   # AGENT-SAFE: never prompts
 sn init                                          # human wizard: prompts, and CLAIMS default_profile
 sn ping                                          # verify connectivity + credentials + build version
-sn --profile prod table list incident           # pick profile per command
+sn -p prod table list incident                  # pick profile per command (-p = --profile)
 sn profile list                                  # also: add <name> / show <name> / use <name> / remove <name>
 ```
 
@@ -24,7 +24,7 @@ sn profile list                                  # also: add <name> / show <name
 
 `add` verifies the credentials against the instance and **writes nothing if they're rejected** (exit 4), so you never inherit a broken profile. Exit 1 if the profile exists (`--force` to overwrite) or a flag is missing. `--no-verify` skips the network; `--set-default` also makes it the default.
 
-Profile selection: `--profile` > `default_profile` in config > error (no implicit fallback). `SN_CONFIG_DIR` overrides the config dir (`config.toml`/`credentials.toml`). No env var sets credentials or selects a profile (proxy/TLS env vars excepted — see Proxy & TLS).
+Profile selection: `--profile`/`-p` > `default_profile` in config > error (no implicit fallback). `SN_CONFIG_DIR` overrides the config dir (`config.toml`/`credentials.toml`). No env var sets credentials or selects a profile (proxy/TLS env vars excepted — see Proxy & TLS).
 
 ## OAuth / SSO
 

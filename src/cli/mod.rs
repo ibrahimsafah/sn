@@ -161,7 +161,7 @@ pub struct Cli {
 #[command(next_help_heading = "Global options")]
 pub struct GlobalFlags {
     /// Profile name (overrides default_profile).
-    #[arg(long, global = true)]
+    #[arg(long, short = 'p', global = true)]
     pub profile: Option<String>,
 
     /// Output mode. `default` (unwrapped result) or `raw` (full SN envelope).

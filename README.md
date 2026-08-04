@@ -610,7 +610,7 @@ Credentials use a two-file, AWS CLI-style split:
 
 macOS uses `~/Library/Application Support/sn/` and Windows `%APPDATA%\sn\`.
 
-A **profile** is the single unit of identity. Create one with `sn init` (which also makes it the default) or `sn profile add` (which does not), select it with `--profile NAME` or `sn profile use NAME`; resolution is `--profile` > `default_profile` > a clear error. No env var or flag overrides an individual profile field.
+A **profile** is the single unit of identity. Create one with `sn init` (which also makes it the default) or `sn profile add` (which does not), select it with `--profile NAME` (`-p NAME`) or `sn profile use NAME`; resolution is `--profile` > `default_profile` > a clear error. No env var or flag overrides an individual profile field.
 
 Point `sn` at a different config directory (for testing or sandboxing) with `SN_CONFIG_DIR`.
 

@@ -83,6 +83,52 @@ async fn display_value_false_is_honored() {
     .unwrap();
 }
 
+/// `-p` selects a profile the way `--profile` does. The default profile points
+/// at an unroutable host, so the request only succeeds if `-p` won.
+#[tokio::test(flavor = "current_thread")]
+async fn short_p_selects_a_profile() {
+    let server = wiremock::MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident/abc"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"result": {"sys_id": "abc"}})),
+        )
+        .mount(&server)
+        .await;
+    let tmp = write_profiles(
+        "wrong",
+        &[
+            ProfileSpec {
+                name: "wrong",
+                instance: "https://unrouteable.invalid",
+                username: "u",
+                password: "p",
+            },
+            ProfileSpec {
+                name: "right",
+                instance: &server.uri(),
+                username: "u",
+                password: "p",
+            },
+        ],
+    );
+    tokio::task::spawn_blocking(move || {
+        sn_cmd(tmp.path())
+            .args([
+                "-p",
+                "right",
+                "--compact",
+                "table",
+                "get",
+                "incident",
+                "abc",
+            ])
+            .assert()
+            .success();
+    })
+    .await
+    .unwrap();
+}
 
 /// Usage reads in the order people type: positionals, then flags.
 #[test]

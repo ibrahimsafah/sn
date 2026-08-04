@@ -79,7 +79,7 @@ fn run(cli: Cli) -> Result<()> {
             AuthSub::Refresh => sn::cli::auth::refresh(&global),
         },
         Command::Profile { sub } => sn::cli::profile::run(&global, sub),
-        Command::Introspect => sn::cli::introspect::run(),
+        Command::Introspect => sn::cli::introspect::run(&global),
         Command::Table { sub } => match sub {
             TableSub::List(args) => sn::cli::table::list(&global, args),
             TableSub::Get(args) => sn::cli::table::get(&global, args),

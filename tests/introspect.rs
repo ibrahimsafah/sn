@@ -126,13 +126,48 @@ fn builtins_go_but_a_real_version_option_stays() {
     );
 }
 
-fn tree() -> Value {
+/// `introspect` hardcoded its own formatter, so every global flag it advertised
+/// did nothing: `--pretty`, `--compact`, and `--output table` all parsed and
+/// were discarded. Silently ignoring an accepted flag gives the caller no
+/// signal at all.
+#[test]
+fn global_output_flags_are_honored() {
+    let pretty = introspect(&["--pretty"]);
+    let compact = introspect(&["--compact"]);
+    assert!(
+        pretty.len() > compact.len(),
+        "--pretty gave {} bytes and --compact {}; the flags are being ignored",
+        pretty.len(),
+        compact.len()
+    );
+    let as_pretty: Value = serde_json::from_slice(&pretty).unwrap();
+    let as_compact: Value = serde_json::from_slice(&compact).unwrap();
+    assert_eq!(as_pretty, as_compact, "formatting changed the tree");
+
+    // A recursive tree has no columnar form, but `--output table` must still
+    // route through write_response like every other command rather than
+    // silently emitting JSON.
+    let table = introspect(&["--output", "table"]);
+    assert!(
+        table.starts_with("┌".as_bytes()),
+        "--output table did not render a table: {}",
+        String::from_utf8_lossy(&table[..table.len().min(80)])
+    );
+}
+
+fn introspect(extra: &[&str]) -> Vec<u8> {
+    let mut args = vec!["introspect"];
+    args.extend_from_slice(extra);
     let out = Command::cargo_bin("sn")
         .unwrap()
-        .args(["introspect"])
+        .args(&args)
         .assert()
         .success();
-    serde_json::from_slice(&out.get_output().stdout).unwrap()
+    out.get_output().stdout.clone()
+}
+
+fn tree() -> Value {
+    serde_json::from_slice(&introspect(&[])).unwrap()
 }
 
 /// Every command node paired with its full path, e.g. `("sn table list", ..)`.

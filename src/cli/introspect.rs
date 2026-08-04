@@ -1,20 +1,21 @@
-use crate::cli::Cli;
+use crate::cli::GlobalFlags;
 use crate::error::Result;
-use crate::output::{emit_value, Format};
-use clap::{Arg, ArgAction, Command as ClapCommand, CommandFactory};
+use clap::{Arg, ArgAction, Command as ClapCommand};
 use serde_json::{json, Value};
-use std::io;
 
-pub fn run() -> Result<()> {
-    // build() finalizes defaults, actions, and value parsers; without it,
-    // num_args/actions are unset and every arg looks like it takes a value.
-    // It also generates the `help` subcommand, which mirrors the entire tree
-    // as arg-less stubs — describe_command filters that back out.
-    let mut cmd = Cli::command();
+use super::table::write_response;
+
+pub fn run(global: &GlobalFlags) -> Result<()> {
+    // Via cli::command(), not Cli::command(), so this describes the same tree
+    // that renders --help. build() then finalizes defaults, actions, and value
+    // parsers; without it num_args/actions are unset and every arg looks like
+    // it takes a value. build() also generates the `help` subcommand, which
+    // mirrors the entire tree as arg-less stubs — describe_command filters
+    // that back out.
+    let mut cmd = crate::cli::command();
     cmd.build();
     let tree = describe_command(&cmd, "sn");
-    emit_value(io::stdout().lock(), &tree, Format::Auto.resolve())
-        .map_err(crate::output::map_stdout_err)
+    write_response(global, &tree)
 }
 
 fn describe_command(cmd: &ClapCommand, name: &str) -> Value {

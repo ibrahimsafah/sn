@@ -202,9 +202,15 @@ sn table list incident
 sn table list incident --query "active=true^priority=1" \
   --fields "number,short_description,state" --setlimit 10
 
-# One record; --display-value swaps internal codes for readable labels
-sn table get incident <sys_id> --display-value all
+# One record. Reference and choice fields come back as readable labels by default;
+# --display-value false returns raw sys_ids and codes, all returns both.
+sn table get incident <sys_id>
+sn table get incident <sys_id> --display-value false
 ```
+
+Note that `--display-value true` (the default) also renders dates in the calling user's
+timezone and locale format, and a display-formatted date cannot be fed back into an
+encoded query. Use `--display-value false` when a value has to round-trip.
 
 ### Writing records
 
@@ -582,7 +588,7 @@ Every `sysparm_*` parameter has both a friendly name and a raw alias; `--query` 
 | `--fields` | `-f` | `--sysparm-fields` | Comma-separated field list |
 | `--setlimit` |  | `--limit`, `--sysparm-limit`, `--page-size` | Max records returned (default 1000 for table list; 100 for attachment list) |
 | `--offset` |  | `--sysparm-offset` | Starting offset |
-| `--display-value` |  | `--sysparm-display-value` | `true`, `false`, `all` |
+| `--display-value` |  | `--sysparm-display-value` | `true` (default), `false`, `all` |
 | `--exclude-reference-link` |  | `--sysparm-exclude-reference-link` | Flag (presence ⇒ true) |
 | `--view` |  | `--sysparm-view` | Named UI view |
 | `--input-display-value` |  | `--sysparm-input-display-value` | Flag (presence ⇒ true; writes) |

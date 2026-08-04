@@ -62,8 +62,13 @@ pub struct ScoresListArgs {
     /// Sort direction.
     #[arg(long, alias = "sysparm-sortdir", value_enum)]
     pub sort_dir: Option<SortDir>,
-    /// Resolve reference/choice fields: false (default), true, or all.
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
+    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
+    #[arg(
+        long,
+        alias = "sysparm-display-value",
+        value_enum,
+        default_value = "true"
+    )]
     pub display_value: Option<DisplayValueArg>,
     /// Exclude reference link URLs from the response.
     #[arg(long, alias = "sysparm-exclude-reference-link", help_heading = ADVANCED)]

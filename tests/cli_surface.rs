@@ -10,7 +10,78 @@ use serde_json::{json, Value};
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, ResponseTemplate};
 
+/// 0.11.0 flipped `--display-value` to default `true`, so reads come back with
+/// readable labels. Nothing pinned the old default, so nothing failed when it
+/// changed — this is that pin.
+#[tokio::test(flavor = "current_thread")]
+async fn display_value_defaults_to_true() {
+    let server = wiremock::MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident/abc"))
+        .and(query_param("sysparm_display_value", "true"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"result": {"sys_id": "abc"}})),
+        )
+        .mount(&server)
+        .await;
+    let tmp = write_profiles(
+        "test",
+        &[ProfileSpec {
+            name: "test",
+            instance: &server.uri(),
+            username: "u",
+            password: "p",
+        }],
+    );
+    tokio::task::spawn_blocking(move || {
+        sn_cmd(tmp.path())
+            .args(["--compact", "table", "get", "incident", "abc"])
+            .assert()
+            .success();
+    })
+    .await
+    .unwrap();
+}
 
+/// The escape hatch back to raw sys_ids and codes, for values that have to
+/// round-trip into a query.
+#[tokio::test(flavor = "current_thread")]
+async fn display_value_false_is_honored() {
+    let server = wiremock::MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident/abc"))
+        .and(query_param("sysparm_display_value", "false"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"result": {"sys_id": "abc"}})),
+        )
+        .mount(&server)
+        .await;
+    let tmp = write_profiles(
+        "test",
+        &[ProfileSpec {
+            name: "test",
+            instance: &server.uri(),
+            username: "u",
+            password: "p",
+        }],
+    );
+    tokio::task::spawn_blocking(move || {
+        sn_cmd(tmp.path())
+            .args([
+                "--compact",
+                "table",
+                "get",
+                "incident",
+                "abc",
+                "--display-value",
+                "false",
+            ])
+            .assert()
+            .success();
+    })
+    .await
+    .unwrap();
+}
 
 
 /// Usage reads in the order people type: positionals, then flags.

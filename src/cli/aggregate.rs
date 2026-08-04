@@ -35,8 +35,13 @@ pub struct AggregateArgs {
     /// Aggregate filter (HAVING clause).
     #[arg(long, alias = "sysparm-having")]
     pub having: Option<String>,
-    /// Resolve reference/choice fields: false (default), true, or all.
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
+    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
+    #[arg(
+        long,
+        alias = "sysparm-display-value",
+        value_enum,
+        default_value = "true"
+    )]
     pub display_value: Option<DisplayValueArg>,
     /// Query category for index selection.
     #[arg(long, alias = "sysparm-query-category")]

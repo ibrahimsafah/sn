@@ -70,8 +70,13 @@ pub struct ChangeListArgs {
     /// Starting offset for manual pagination.
     #[arg(long, alias = "sysparm-offset")]
     pub offset: Option<u32>,
-    /// Resolve reference/choice fields: false (default), true, or all.
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
+    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
+    #[arg(
+        long,
+        alias = "sysparm-display-value",
+        value_enum,
+        default_value = "true"
+    )]
     pub display_value: Option<DisplayValueArg>,
     /// Strip reference-link URLs from reference fields.
     #[arg(long, alias = "sysparm-exclude-reference-link", help_heading = ADVANCED)]
@@ -91,8 +96,13 @@ pub struct ChangeGetArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: false (default), true, or all.
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
+    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
+    #[arg(
+        long,
+        alias = "sysparm-display-value",
+        value_enum,
+        default_value = "true"
+    )]
     pub display_value: Option<DisplayValueArg>,
     /// Strip reference-link URLs from reference fields.
     #[arg(long, alias = "sysparm-exclude-reference-link", help_heading = ADVANCED)]
@@ -119,8 +129,13 @@ pub struct ChangeCreateArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: false (default), true, or all.
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
+    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
+    #[arg(
+        long,
+        alias = "sysparm-display-value",
+        value_enum,
+        default_value = "true"
+    )]
     pub display_value: Option<DisplayValueArg>,
 }
 
@@ -140,8 +155,13 @@ pub struct ChangeUpdateArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: false (default), true, or all.
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
+    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
+    #[arg(
+        long,
+        alias = "sysparm-display-value",
+        value_enum,
+        default_value = "true"
+    )]
     pub display_value: Option<DisplayValueArg>,
 }
 

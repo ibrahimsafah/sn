@@ -53,7 +53,9 @@ Data commands never open a browser — tokens refresh transparently. A missing/e
 
 Flags (global unless noted; every `sysparm_*` has a friendly name + raw `--sysparm-*` alias):
 
-- `--display-value true|false|all` (list/get) — resolve choice/reference fields to labels
+- `--display-value true|false|all` (list/get) — **defaults to `true`**: choice/reference fields
+  come back as labels, and dates in the caller's timezone/locale (which will not round-trip into
+  a query). `false` for raw values, `all` for both.
 - `--setlimit N` (list; default 1000; aliases `--limit`, `--page-size`) — max records
 - `--input-display-value` (writes) — set fields by display value
 - `--timeout SECS` (default 30) · `--pretty`/`--compact` (default: pretty on TTY, compact when piped)
@@ -78,7 +80,7 @@ Response-shape gotchas — these bite hard because the obvious `jq` is silently 
 ```bash
 sn table list incident --query "active=true^priority=1" --fields "number,state" --setlimit 10
 sn table get incident <sys_id>
-sn table get incident <sys_id> --display-value all     # human-readable choice/reference values
+sn table get incident <sys_id> --display-value false  # raw sys_ids and codes (labels are the default)
 sn table create incident --field short_description="x" --field urgency=2
 sn table create incident --data @body.json             # or --data '{"key":"val"}'
 sn table update incident <sys_id> --field state=6      # PATCH (partial)

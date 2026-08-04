@@ -68,8 +68,13 @@ pub struct TableListArgs {
     /// Starting offset for manual pagination (ignored with --all).
     #[arg(long, alias = "sysparm-offset")]
     pub offset: Option<u32>,
-    /// Resolve reference/choice fields: false (default), true, or all.
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
+    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
+    #[arg(
+        long,
+        alias = "sysparm-display-value",
+        value_enum,
+        default_value = "true"
+    )]
     pub display_value: Option<DisplayValueArg>,
     /// Strip reference-link URLs from reference fields.
     #[arg(
@@ -117,8 +122,13 @@ pub struct TableGetArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: false (default), true, or all.
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
+    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
+    #[arg(
+        long,
+        alias = "sysparm-display-value",
+        value_enum,
+        default_value = "true"
+    )]
     pub display_value: Option<DisplayValueArg>,
     /// Strip reference-link URLs from reference fields.
     #[arg(
@@ -148,8 +158,13 @@ pub struct TableCreateArgs {
     /// Comma-separated fields to return on the created record.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: false (default), true, or all.
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
+    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
+    #[arg(
+        long,
+        alias = "sysparm-display-value",
+        value_enum,
+        default_value = "true"
+    )]
     pub display_value: Option<DisplayValueArg>,
     /// Strip reference-link URLs from reference fields.
     #[arg(
@@ -188,8 +203,13 @@ pub struct TableUpdateArgs {
     /// Comma-separated fields to return on the updated record.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: false (default), true, or all.
-    #[arg(long, alias = "sysparm-display-value", value_enum)]
+    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
+    #[arg(
+        long,
+        alias = "sysparm-display-value",
+        value_enum,
+        default_value = "true"
+    )]
     pub display_value: Option<DisplayValueArg>,
     /// Strip reference-link URLs from reference fields.
     #[arg(

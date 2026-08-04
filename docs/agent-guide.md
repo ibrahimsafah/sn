@@ -717,6 +717,7 @@ sn user me                               # the authenticated user's sys_user rec
 sn open incident a1b2c3 [--print-url]    # open the record's form in a browser; --print-url prints the URL instead
 sn raw GET /api/now/table/incident --query sysparm_limit=5      # REST passthrough for unmodeled endpoints
 sn raw POST /api/now/table/incident --data '{"short_description":"via raw"}'
+sn raw GET /api/now/table/incident -H 'X-no-response-body: true'   # repeatable request headers
 sn completion zsh                        # shell completion script (bash|zsh|fish|powershell|elvish) to stdout
 sn introspect                            # full command tree as JSON — auto-generate MCP / function-call schemas
 ```

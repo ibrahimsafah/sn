@@ -512,6 +512,7 @@ sn raw GET /api/now/v2/table/incident -q sysparm_limit=5 -q sysparm_query=active
 sn raw POST /api/now/table/incident --data '{"short_description":"From sn raw"}'
 sn raw PATCH /api/now/table/incident/abc123 --field state=2
 sn raw DELETE /api/now/table/incident/abc123
+sn raw GET /api/now/table/incident -H 'X-no-response-body: true' -H 'X-Trace: 1'
 ```
 
 ### Human-readable table output

@@ -46,7 +46,7 @@ src/
     table.rs        → sn table list/get/create/update/delete + shared helpers
     watch.rs        → sn watch table/count/activity/channel (live record watchers; streams JSONL)
     schema.rs       → sn schema tables/columns/choices (undocumented SN endpoints)
-    introspect.rs   → sn introspect (dumps clap command tree as JSON)
+    introspect.rs   → sn introspect (dumps clap command tree as JSON; see "The introspect contract")
     progress.rs     → sn progress + finish_cicd (poll async CICD ops)
     app.rs          → sn app install/publish/rollback (App Repository)
     update_set.rs   → sn updateset create/retrieve/preview/commit/commit-multiple/back-out
@@ -62,7 +62,7 @@ src/
     user.rs         → sn user me (authenticated user via gs.getUserName())
     ping.rs         → sn ping (auth + latency + ServiceNow build version)
     open_record.rs  → sn open <table> <sys_id> (opens the form in the browser)
-    raw.rs          → sn raw <method> <path> (REST passthrough for unmodeled endpoints)
+    raw.rs          → sn raw <method> <path> (REST passthrough for unmodeled endpoints; --header, --query, --data/--field)
     completion.rs   → sn completion <shell> (clap_complete)
 ```
 
@@ -128,6 +128,22 @@ Transport gaps: the socket is opened directly rather than through reqwest, so it
 - `upload_file(path, query, body: Vec<u8>, content_type)` — POST raw binary with a custom Content-Type.
 - `download_file(path) -> (Vec<u8>, Option<String>)` — GET binary, returns bytes + Content-Type.
 - `delete_json(path, query) -> Value` — DELETE expecting a JSON body (vs `delete()` returning `()`).
+
+`Client` also carries an `extra_headers: HeaderMap` for `sn raw --header`, applied **last** in `send()` — after auth and after the `Content-Type` that `request()` sets on bodied calls. Merging caller headers into `ClientBuilder`'s defaults instead is silently overridden for exactly `Content-Type`, since reqwest ranks request-level headers above client defaults; the request goes out under the old value with no error. `RequestBuilder::headers` replaces rather than appends, so a caller's `Content-Type` supplants ours instead of arriving as a second value. `build_client_with_headers` (in `cli/table.rs`) is a separate entry point so no other call site changed. `Authorization` never reaches here — `raw` rejects it at parse time, because a profile is the whole unit of identity and a credential in argv is visible to `ps`.
+
+### The introspect contract
+
+`sn introspect` is the machine-readable face of the command tree — MCP and function-call schema generators consume it — so its **output shape is a contract**, and changing it is a breaking change for anything caching generated schemas. Emit through `cli::command()` (not `Cli::command()`) then `build()`, and through `write_response` like every other command.
+
+- **Nodes** are `{name, about, args[], subcommands[]}`, recursive. The root additionally carries `version` (from `CARGO_PKG_VERSION`) and `global_args`.
+- **A command's effective flags are its own `args` plus the root's `global_args`.** clap propagates the 11 globals onto every node; serializing them there was 1,480 of 1,852 argument entries — three quarters of a 481 KB tree. Partition with `Arg::is_global_set()`. Non-global args do not propagate, so there is no ancestor chain to walk.
+- **`build()` is required *and* is the trap.** It finalizes actions, defaults, and value names (without it every arg looks like it takes a value), but it also generates the `help` subcommand, which mirrors the whole tree as argument-less stubs. Emitting that put 274 of 391 nodes there and gave every real command a same-named twin. `describe_command` filters `help` and hidden subcommands back out.
+- **Drop `--help`/`--version` by clap *action*, never by name.** `sn app install --version <VERSION>` is a real value-taking option that a name-based filter deletes.
+- **`conflicts_with` comes from the command** (`Command::get_arg_conflicts_with`), which is why `describe_arg` takes one; it is sorted so the tree is byte-stable across runs. Its inverse is unavailable: clap keeps `requires` `pub(crate)`, so `--wait-timeout` needing `--wait` survives only as prose in that flag's help. Don't go looking for the getter.
+
+Guards live in `tests/introspect.rs` (no node named `help`, unique command paths, globals not duplicated, builtins gone but `app install --version` intact). Note that `tests/cli_surface.rs::every_argument_has_help_text` walks this tree: it chains the root's `global_args`, because checking `args` alone would silently stop covering 11 flags rather than fail.
+
+Four places document this schema by hand and must move together: `.claude/skills/sn.md`, `skills/sn/SKILL.md`, `docs/agent-guide.md`, and `README.md`.
 
 ### Profile resolution precedence
 

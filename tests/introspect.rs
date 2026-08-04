@@ -126,6 +126,38 @@ fn builtins_go_but_a_real_version_option_stays() {
     );
 }
 
+/// Without these a generated schema emits invocations the CLI rejects: `--data`
+/// alongside `--field` is exit 1, and every value-taking option looked like a
+/// free-form string with no placeholder.
+#[test]
+fn args_carry_the_constraints_a_schema_needs() {
+    let tree = tree();
+    let create = find_sub(find_sub(&tree, "table"), "create");
+    let args = create["args"].as_array().unwrap();
+
+    let data = find_arg(args, "data");
+    assert_eq!(
+        data["conflicts_with"][0], "field",
+        "--data/--field exclusion is not machine-readable: {data}"
+    );
+    assert_eq!(find_arg(args, "field")["conflicts_with"][0], "data");
+    assert_eq!(data["value_name"], "DATA");
+
+    // The three help tiers reach the machine-readable face too.
+    assert_eq!(find_arg(args, "view")["help_heading"], "Advanced options");
+    assert_eq!(find_arg(args, "profile")["help_heading"], "Global options");
+    assert!(
+        find_arg(args, "table")["help_heading"].is_null(),
+        "a command's own working set carries no heading"
+    );
+}
+
+/// Lets a consumer invalidate cached schemas when the binary changes.
+#[test]
+fn root_carries_the_binary_version() {
+    assert_eq!(tree()["version"], env!("CARGO_PKG_VERSION"));
+}
+
 /// `introspect` hardcoded its own formatter, so every global flag it advertised
 /// did nothing: `--pretty`, `--compact`, and `--output table` all parsed and
 /// were discarded. Silently ignoring an accepted flag gives the caller no

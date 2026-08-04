@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+### Added
+
+- **`sn introspect` emits the constraints a schema generator needs.** Each `args[]` entry
+  gains `conflicts_with` (the arg ids that cannot be combined with it — `--data` alongside
+  `--field` is exit 1), `value_name` (the `SECS`/`URL`/`PATH` placeholder `--help` shows),
+  and `help_heading` (`Global options`, `Advanced options`, or `null` for a command's
+  working set). The root gains `version`, so a consumer caching generated schemas can
+  invalidate them on an upgrade.
+
+  One relation stays out of reach: clap keeps `requires` private, so `--wait-timeout`
+  requiring `--wait` is still only prose in that flag's `help`.
+
 ### Fixed
 
 - **`sn introspect` honors the global output flags it accepts.** `--pretty`, `--compact`,

@@ -4,6 +4,12 @@
 
 ### Fixed
 
+- **`sn introspect` honors the global output flags it accepts.** `--pretty`, `--compact`,
+  and `--output table` all parsed and were then discarded, because the command hardcoded
+  its own formatter instead of routing through the shared `write_response`. It also built
+  its tree from `Cli::command()` rather than `cli::command()`, so it described a command
+  tree whose usage lines differed from the one `--help` renders.
+
 - **`sn introspect` no longer emits clap's generated `help` subcommand.** It mirrored the
   whole command tree as argument-less stubs, so 274 of 391 nodes described nothing
   callable and every real command had a same-named twin: `sn help table list` sat beside

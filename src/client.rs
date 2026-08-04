@@ -27,6 +27,10 @@ pub struct Client {
     http: ReqwestClient,
     base_url: String,
     auth: Auth,
+    /// Caller-supplied request headers (`sn raw --header`). Applied **last** in
+    /// [`Client::send`] so they beat both the client defaults and the
+    /// per-request `Content-Type`; empty for every command but `sn raw`.
+    extra_headers: HeaderMap,
 }
 
 impl std::fmt::Debug for Client {
@@ -54,6 +58,7 @@ pub struct ClientBuilder {
     proxy_username: Option<String>,
     proxy_password: Option<String>,
     auth: Option<Auth>,
+    extra_headers: HeaderMap,
 }
 
 impl Default for ClientBuilder {
@@ -69,6 +74,7 @@ impl Default for ClientBuilder {
             proxy_username: None,
             proxy_password: None,
             auth: None,
+            extra_headers: HeaderMap::new(),
         }
     }
 }
@@ -114,6 +120,22 @@ impl ClientBuilder {
     /// HTTP Basic using the profile's username/password (backward compatible).
     pub fn auth(mut self, auth: Auth) -> Self {
         self.auth = Some(auth);
+        self
+    }
+
+    /// Attach caller-supplied request headers, applied last in
+    /// [`Client::send`].
+    ///
+    /// Deliberately *not* merged into `default_headers`: reqwest gives
+    /// request-level headers priority over client defaults, so a default-header
+    /// merge would be silently overridden — no error, the old value just goes
+    /// out — for exactly the two headers callers reach for: `Content-Type` (set
+    /// per request in [`Client::request`]) and `Authorization` (set per request
+    /// in `send`). A name present here replaces whatever the client would
+    /// otherwise send under it; repeats of one name in the map are preserved as
+    /// multiple values.
+    pub fn extra_headers(mut self, headers: HeaderMap) -> Self {
+        self.extra_headers = headers;
         self
     }
 
@@ -180,6 +202,7 @@ impl ClientBuilder {
             http,
             base_url,
             auth,
+            extra_headers: self.extra_headers,
         })
     }
 }
@@ -278,6 +301,17 @@ impl Client {
             Auth::Bearer { token } => req.bearer_auth(token),
             Auth::None => req,
         };
+        // Caller headers go on last, after every request-level header this
+        // client sets: the `Content-Type` that `request()` puts on bodied calls
+        // and the auth header just above. `RequestBuilder::headers` *replaces*
+        // the values of the names it carries (unlike `.header()`, which
+        // appends), so a caller's `Content-Type` supplants ours instead of
+        // arriving as a second value. Client defaults (`Accept`, `User-Agent`)
+        // are merged at execute time into names the request does not already
+        // carry, so they lose to a caller header without anything done here.
+        if !self.extra_headers.is_empty() {
+            req = req.headers(self.extra_headers.clone());
+        }
         log_request(method_name, url);
         let start = Instant::now();
         let resp = req.send().map_err(|e| Error::Transport(format!("{e}")))?;

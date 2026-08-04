@@ -1,5 +1,76 @@
 # Changelog
 
+## 0.11.0 (2026-08-04)
+
+### Breaking changes
+
+- **`sn table replace` and `sn cmdb replace` are gone. Use `update`.** They issued PUT
+  where `update` issues PATCH, and ServiceNow treats both as partial updates — so the
+  two verbs did the same thing while implying they did not. Measured on a live instance
+  by writing one field to two identical records, one per verb: both moved exactly the
+  field written plus the same three derived columns (`sys_mod_count`, `sys_updated_on`,
+  `activity_due`), and PUT blanked none of the ten fields it omitted. Same result on
+  `/api/now/cmdb/instance`. Anything calling `replace` should call `update` with the
+  same body; no other change is needed.
+
+- **`--display-value` now defaults to `true`.** Reference and choice fields come back as
+  readable labels (`"Software"`, `"In Progress"`) instead of sys_ids and numeric codes.
+  Applies to `table`, `change`, `aggregate`, and `scores`; `sn watch` is unaffected,
+  since its `--display-value` only narrows a `--hydrate` fetch.
+
+  Two consequences worth knowing. Dates and times are also rewritten, into the calling
+  user's timezone and locale format (`2026-08-04 14:22:01` becomes `08/04/2026 10:22:01
+  AM`), and a display-formatted date cannot be fed back into an encoded query. And a
+  reference field yields a name rather than the sys_id you would need to chain into
+  another call. Pass **`--display-value false`** for the old raw output, or
+  **`--display-value all`** for both (each field becomes a `{value, display_value}`
+  object).
+
+### Added
+
+- **The read verb may be omitted on `table` and `cmdb`.** `sn table incident <sys_id>` is
+  `get`, `sn table incident` is `list`, and the same for `sn cmdb <class> [sys_id]`. Both
+  groups map to a REST path that is already `{noun}/{id}`, so for a read the verb is
+  implied by the method. (Reported as #23, where an agent wrote exactly this form and got
+  `unrecognized subcommand 'sc_cat_item'` with nothing to act on.)
+
+  Only `get` and `list` are ever inferred — never a write — and the choice is decided, not
+  guessed: `get` requires a second positional and `list` rejects one, so exactly one of
+  them can parse any given argv. A misspelled verb is still a misspelled verb:
+  `sn table lst incident` keeps clap's `tip: a similar subcommand exists: 'list'` rather
+  than fetching from a table named `lst`. Groups with non-CRUD subcommands (`change`,
+  `catalog`) are excluded, since there the first token is not reliably a noun.
+
+- **`-p` as a short alias for `--profile`.** Global, so `sn -p prod table list incident`
+  and `sn table list incident -p prod` are equivalent.
+
+### Fixed
+
+- **`unrecognized subcommand` now names the subcommands that exist.** clap only offers a
+  suggestion when the bad token is within edit distance of a real one, which a table name
+  never is — so `sn change sc_cat_item abc` printed a usage line and nothing else. The
+  error now appends `` `sn change` subcommands: list, get, create, … `` for every group.
+
+### Changed
+
+- **`--help` is organized instead of exhaustive.** The 11 global flags used to be
+  interleaved with each command's own — clap gives every argument container its own
+  display-order counter and merges them, which zippered `--profile`/`--output`/`--pretty`
+  through the middle of `--query`/`--fields`/`--setlimit`. They now sit in their own
+  `Global options` section below the command's flags, on all 331 subcommands. Raw
+  `sysparm_*` passthroughs most callers never touch (`--view`, `--query-category`,
+  `--query-no-domain`, `--no-count`, `--suppress-pagination-header`,
+  `--exclude-reference-link`) moved to `Advanced options`. `sn scores list` additionally
+  splits its score-series flags into `Score data options`.
+
+- **Every flag and positional now has help text.** 123 arguments across 54 commands had
+  none — `sn table get --help` listed `<TABLE>`, `<SYS_ID>` and five flags with blank
+  descriptions. All 1688 arguments are now documented.
+
+- **Usage lines put `[OPTIONS]` last**: `sn table get <TABLE> <SYS_ID> [OPTIONS]`, which
+  is the order people type. Parsing is unchanged — flags are still accepted in any
+  position, before or after positionals and before or after the subcommand.
+
 ## 0.10.0 (2026-07-14)
 
 ### Breaking changes

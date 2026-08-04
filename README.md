@@ -557,7 +557,15 @@ In a clone of this repo, the skill at `.claude/skills/sn.md` is picked up automa
 
 ```bash
 sn introspect | jq '.subcommands[] | {name, about}'
+
+# Flags that cannot be combined, across the whole tree:
+sn introspect | jq '[.. | objects | select(.conflicts_with? // [] | length > 0)
+                     | {name, conflicts_with}] | unique'
 ```
+
+Each `args[]` entry carries `name`, `long`, `short`, `help`, `help_heading`, `required`, `takes_value`, `value_name`, `positional`, `repeatable`, `aliases`, `default_values`, `possible_values`, and `conflicts_with`; the root carries `version`. `--help` and `--version` are omitted — they exit before any handler runs — and nothing named `help` appears in the tree.
+
+One relation is missing and cannot be added: clap keeps `requires` private, so `--wait-timeout` requiring `--wait` shows up only as prose in that flag's `help`.
 
 ## Output contract
 

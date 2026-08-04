@@ -14,7 +14,10 @@ pub fn run(global: &GlobalFlags) -> Result<()> {
     // that back out.
     let mut cmd = crate::cli::command();
     cmd.build();
-    let tree = describe_command(&cmd, "sn");
+    let mut tree = describe_command(&cmd, "sn");
+    // Stamped at the root only, so a consumer caching generated schemas can
+    // tell which binary produced the tree and invalidate on an upgrade.
+    tree["version"] = json!(env!("CARGO_PKG_VERSION"));
     write_response(global, &tree)
 }
 
@@ -22,7 +25,7 @@ fn describe_command(cmd: &ClapCommand, name: &str) -> Value {
     let args: Vec<Value> = cmd
         .get_arguments()
         .filter(|a| !a.is_hide_set() && !is_builtin(a))
-        .map(describe_arg)
+        .map(|a| describe_arg(cmd, a))
         .collect();
     // `help` is clap's, and it mirrors the whole tree as stubs that carry no
     // args — emitting it doubles the node count with nodes that describe
@@ -51,8 +54,26 @@ fn is_builtin(a: &Arg) -> bool {
     )
 }
 
-fn describe_arg(a: &Arg) -> Value {
+/// `cmd` is needed for `conflicts_with`: clap exposes the relation from the
+/// command, not the argument. Its inverse, `requires`, has no public getter at
+/// all (`Arg::requires` is `pub(crate)`), so `--wait-timeout requires --wait`
+/// survives only as prose in that flag's help text. Don't go looking for it.
+fn describe_arg(cmd: &ClapCommand, a: &Arg) -> Value {
     let aliases: Vec<&str> = a.get_all_aliases().unwrap_or_default();
+    // Sorted so the tree is byte-stable across runs — a machine-readable
+    // contract that reorders itself is painful to diff and cache.
+    let mut conflicts: Vec<String> = cmd
+        .get_arg_conflicts_with(a)
+        .iter()
+        .map(|c| c.get_id().as_str().to_string())
+        .collect();
+    conflicts.sort();
+    // build() fills these in for every value-taking arg, so this is the
+    // placeholder `--help` actually shows, not just an explicit `value_name`.
+    let value_name = a
+        .get_value_names()
+        .and_then(|names| names.first())
+        .map(|n| n.to_string());
     let takes_value = matches!(a.get_action(), ArgAction::Set | ArgAction::Append);
     // Flags (SetTrue/Count) carry a synthetic bool parser; suppress its
     // ["true","false"] so agents don't emit `--flag true`.
@@ -75,11 +96,14 @@ fn describe_arg(a: &Arg) -> Value {
         "short": a.get_short(),
         "aliases": aliases,
         "help": a.get_help().map(|s| s.to_string()),
+        "help_heading": a.get_help_heading(),
         "required": a.is_required_set(),
         "takes_value": takes_value,
+        "value_name": value_name,
         "positional": a.is_positional(),
         "repeatable": matches!(a.get_action(), ArgAction::Append | ArgAction::Count),
         "default_values": default_values,
         "possible_values": possible_values,
+        "conflicts_with": conflicts,
     })
 }

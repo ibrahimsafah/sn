@@ -292,7 +292,7 @@ sn completion bash|zsh|fish|powershell|elvish   # zsh: > ~/.zsh/completions/_sn 
 sn introspect                              # full command tree as JSON (for MCP/tool generation)
 ```
 
-`raw` emits the response exactly as ServiceNow returns it (no unwrapping); method is case-insensitive. `introspect` args carry `takes_value`, `positional`, `repeatable`, `default_values`, `aliases`, `possible_values`; flags report `takes_value: false` — pass them bare (`--all`, not `--all true`).
+`raw` emits the response exactly as ServiceNow returns it (no unwrapping); method is case-insensitive. `introspect` args carry `takes_value`, `value_name`, `positional`, `repeatable`, `default_values`, `aliases`, `possible_values`, `conflicts_with`, and `help_heading`; flags report `takes_value: false` — pass them bare (`--all`, not `--all true`). `conflicts_with` names the flags that cannot be combined (`--data` with `--field` is exit 1). The root carries `version`. Nothing named `help` appears in the tree, and `--help`/`--version` are omitted from `args[]`.
 
 ## Proxy & TLS
 

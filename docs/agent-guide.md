@@ -738,12 +738,20 @@ sn introspect | jq '.subcommands[] | select(.name=="table")
                     | .subcommands[] | select(.name=="list") | .args[].name'
 ```
 
-Each entry in `args[]` carries `name`, `long`, `short`, `help`, `required`,
-`takes_value`, `positional`, `repeatable`, `aliases`, and `possible_values` —
-enough to generate an MCP tool or function-call schema. The help string is
-`help`, not `about`; `about` is the *command's* description. A
-`takes_value: false` arg is a valueless switch: emit `--all`, never
-`--all true`.
+Each entry in `args[]` carries `name`, `long`, `short`, `help`, `help_heading`,
+`required`, `takes_value`, `value_name`, `positional`, `repeatable`, `aliases`,
+`default_values`, `possible_values`, and `conflicts_with` — enough to generate
+an MCP tool or function-call schema. The root additionally carries `version`,
+the binary that produced the tree. The help string is `help`, not `about`;
+`about` is the *command's* description. A `takes_value: false` arg is a
+valueless switch: emit `--all`, never `--all true`.
+
+`conflicts_with` lists the arg ids that cannot be combined with this one, so a
+generator never emits `--data` alongside `--field` (exit 1). Its inverse is
+**not** available: clap keeps `requires` private, so `--wait-timeout` requiring
+`--wait` appears only as prose in that flag's `help`. `help_heading` carries the
+tier `--help` renders — `Global options`, `Advanced options`, or `null` for a
+command's working set.
 
 `--help` and `--version` are omitted: they exit before any handler runs, so
 there is nothing for a generated tool to call. Nothing named `help` appears in

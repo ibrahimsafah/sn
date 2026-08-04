@@ -612,7 +612,7 @@ Every `sysparm_*` parameter has both a friendly name and a raw alias; `--query` 
 |---|---|---|---|
 | `--query` | `-q` | `--sysparm-query` | Encoded query string |
 | `--fields` | `-f` | `--sysparm-fields` | Comma-separated field list |
-| `--setlimit` |  | `--limit`, `--sysparm-limit`, `--page-size` | Max records returned (default 1000 for table list; 100 for attachment list) |
+| `--setlimit` |  | `--limit`, `--sysparm-limit`, `--page-size` | Max records returned. Default 1000 on `table`/`change`/`cmdb` list; 100 on `change task list`, `attachment list`, `catalog categories`, `catalog items` |
 | `--offset` |  | `--sysparm-offset` | Starting offset |
 | `--display-value` |  | `--sysparm-display-value` | `true` (default), `false`, `all` |
 | `--exclude-reference-link` |  | `--sysparm-exclude-reference-link` | Flag (presence ⇒ true) |

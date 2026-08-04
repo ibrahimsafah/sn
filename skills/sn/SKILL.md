@@ -81,6 +81,8 @@ Response-shape gotchas — these bite hard because the obvious `jq` is silently 
 ```bash
 sn table list incident --query "active=true^priority=1" --fields "number,state" --setlimit 10
 sn table get incident <sys_id>
+sn table incident <sys_id>                            # verb optional on table/cmdb: = get
+sn table incident                                     # = list (never infers a write)
 sn table get incident <sys_id> --display-value false  # raw sys_ids and codes (labels are the default)
 sn table create incident --field short_description="x" --field urgency=2
 sn table create incident --data @body.json             # or --data '{"key":"val"}'

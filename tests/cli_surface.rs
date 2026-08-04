@@ -212,6 +212,99 @@ fn replace_is_not_a_subcommand() {
     );
 }
 
+/// Issue #23: an agent wrote `sn table <table> <sys_id>` without `get`, which
+/// mirrors the REST path it maps to. It now dispatches to `get`.
+#[tokio::test(flavor = "current_thread")]
+async fn omitted_get_verb_is_recovered() {
+    let server = wiremock::MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/sc_cat_item/abc"))
+        .respond_with(
+            ResponseTemplate::new(200).set_body_json(json!({"result": {"sys_id": "abc"}})),
+        )
+        .mount(&server)
+        .await;
+    let tmp = write_profiles(
+        "test",
+        &[ProfileSpec {
+            name: "test",
+            instance: &server.uri(),
+            username: "u",
+            password: "p",
+        }],
+    );
+    tokio::task::spawn_blocking(move || {
+        sn_cmd(tmp.path())
+            .args(["--compact", "table", "sc_cat_item", "abc"])
+            .assert()
+            .success();
+    })
+    .await
+    .unwrap();
+}
 
+/// With no sys_id there is nothing to `get`, so the same shorthand means `list`.
+/// Only one of the two can parse, which is what makes this a decision.
+#[tokio::test(flavor = "current_thread")]
+async fn omitted_list_verb_is_recovered() {
+    let server = wiremock::MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/now/table/incident"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": []})))
+        .mount(&server)
+        .await;
+    let tmp = write_profiles(
+        "test",
+        &[ProfileSpec {
+            name: "test",
+            instance: &server.uri(),
+            username: "u",
+            password: "p",
+        }],
+    );
+    tokio::task::spawn_blocking(move || {
+        sn_cmd(tmp.path())
+            .args(["--compact", "table", "incident"])
+            .assert()
+            .success();
+    })
+    .await
+    .unwrap();
+}
 
+/// The shorthand must not swallow a misspelled verb. `lst` is within clap's
+/// edit distance of `list`, so it stays a typo rather than becoming a GET
+/// against a table named `lst`.
+#[test]
+fn misspelled_verb_still_suggests_the_real_one() {
+    let out = Command::cargo_bin("sn")
+        .unwrap()
+        .args(["table", "lst", "incident"])
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("a similar subcommand exists") && stderr.contains("list"),
+        "typo suggestion lost:\n{stderr}"
+    );
+}
 
+/// Groups outside the shorthand keep erroring, but the error now names what is
+/// actually valid — clap alone lists nothing.
+#[test]
+fn unrecognized_subcommand_lists_the_valid_ones() {
+    let out = Command::cargo_bin("sn")
+        .unwrap()
+        .args(["change", "sc_cat_item", "abc"])
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    for expected in ["list", "get", "nextstates", "approvals"] {
+        assert!(
+            stderr.contains(expected),
+            "hint omits {expected}:\n{stderr}"
+        );
+    }
+}

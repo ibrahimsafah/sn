@@ -87,11 +87,118 @@ pub fn command() -> clap::Command {
     with_usage(Cli::command(), "sn")
 }
 
+/// Groups whose verb may be omitted: `sn table incident <sys_id>` is `get`,
+/// `sn table incident` is `list`. Both mirror a REST path that is already
+/// `{noun}/{id}` (`/api/now/table/{table}/{sys_id}`,
+/// `/api/now/cmdb/instance/{class}/{sys_id}`), so the verb is implied by the
+/// method for a read. Groups with non-CRUD subcommands (`change nextstates`,
+/// `catalog checkout`) are deliberately excluded — there the first token is not
+/// reliably a noun.
+const IMPLIED_VERB_GROUPS: [&str; 2] = ["table", "cmdb"];
+
 /// Parse argv through [`command`] so error messages carry the same usage lines
-/// as `--help`.
+/// as `--help`, recovering an omitted read verb where that is unambiguous.
 pub fn parse() -> Result<Cli, clap::Error> {
-    let matches = command().try_get_matches()?;
-    Cli::from_arg_matches(&matches)
+    let argv: Vec<std::ffi::OsString> = std::env::args_os().collect();
+    let err = match command().try_get_matches_from(argv.clone()) {
+        Ok(matches) => return Cli::from_arg_matches(&matches),
+        Err(err) => err,
+    };
+    for candidate in implied_verb_argv(&argv, &err) {
+        if let Ok(matches) = command().try_get_matches_from(candidate) {
+            return Cli::from_arg_matches(&matches);
+        }
+    }
+    Err(err)
+}
+
+/// Rewrites of argv with a read verb inserted, most specific first. Empty when
+/// the shorthand does not apply.
+///
+/// Exactly one of `get`/`list` can ever parse: `get` requires a second
+/// positional and `list` rejects one, so trying both in turn is a decision, not
+/// a guess.
+fn implied_verb_argv(
+    argv: &[std::ffi::OsString],
+    err: &clap::Error,
+) -> Vec<Vec<std::ffi::OsString>> {
+    use clap::error::{ContextKind, ContextValue, ErrorKind};
+
+    if err.kind() != ErrorKind::InvalidSubcommand {
+        return Vec::new();
+    }
+    // clap matched the token against a real verb by edit distance, so this is a
+    // misspelling (`sn table lst incident`), not a table name. Leave its "did
+    // you mean" intact rather than firing a GET at a table called `lst`.
+    if let Some(ContextValue::Strings(near)) = err.get(ContextKind::SuggestedSubcommand) {
+        if !near.is_empty() {
+            return Vec::new();
+        }
+    }
+    let Some(ContextValue::String(token)) = err.get(ContextKind::InvalidSubcommand) else {
+        return Vec::new();
+    };
+    let Some(group) = usage_group(err) else {
+        return Vec::new();
+    };
+    if !IMPLIED_VERB_GROUPS.contains(&group.as_str()) {
+        return Vec::new();
+    }
+    // The rejected token sits directly after its group in argv.
+    let Some(at) = argv
+        .windows(2)
+        .position(|w| w[0] == *group.as_str() && w[1] == *token.as_str())
+    else {
+        return Vec::new();
+    };
+    ["get", "list"]
+        .iter()
+        .map(|verb| {
+            let mut rewritten = argv.to_vec();
+            rewritten.insert(at + 1, std::ffi::OsString::from(verb));
+            rewritten
+        })
+        .collect()
+}
+
+/// The command group an error came from, read back out of its usage line —
+/// which [`usage_line`] renders as `sn <path> <COMMAND>`.
+fn usage_group(err: &clap::Error) -> Option<String> {
+    use clap::error::{ContextKind, ContextValue};
+
+    let ContextValue::StyledStr(usage) = err.get(ContextKind::Usage)? else {
+        return None;
+    };
+    let text = usage.to_string();
+    let mut parts = text.split_whitespace().rev();
+    (parts.next()? == "<COMMAND>").then(|| parts.next().map(str::to_string))?
+}
+
+/// The subcommands a group accepts, for an error message that would otherwise
+/// name none of them. `None` when the group can't be resolved.
+pub fn valid_subcommands(err: &clap::Error) -> Option<(String, Vec<String>)> {
+    let group = usage_group(err)?;
+    let mut cmd = command();
+    cmd.build();
+    let node = find_command(&cmd, &group)?;
+    let names: Vec<String> = node
+        .get_subcommands()
+        .filter(|s| s.get_name() != "help")
+        .map(|s| s.get_name().to_string())
+        .collect();
+    (!names.is_empty()).then_some((group, names))
+}
+
+fn find_command<'a>(cmd: &'a clap::Command, name: &str) -> Option<&'a clap::Command> {
+    for sub in cmd.get_subcommands() {
+        if sub.get_name() == name {
+            return Some(sub);
+        }
+        if let Some(found) = find_command(sub, name) {
+            return Some(found);
+        }
+    }
+    None
 }
 
 fn with_usage(cmd: clap::Command, path: &str) -> clap::Command {

@@ -35,15 +35,35 @@ fn handle_clap_error(err: clap::Error) -> ExitCode {
             ExitCode::SUCCESS
         }
         _ => {
+            let hint = subcommand_hint(&err);
             if io::stderr().is_terminal() {
                 let _ = err.print();
+                if let Some(hint) = hint {
+                    eprintln!("{hint}");
+                }
             } else {
-                let message = err.render().to_string().trim_end().to_string();
+                let mut message = err.render().to_string().trim_end().to_string();
+                if let Some(hint) = hint {
+                    message.push_str("\n\n");
+                    message.push_str(&hint);
+                }
                 let _ = emit_error(io::stderr().lock(), &sn::error::Error::Usage(message));
             }
             ExitCode::from(1)
         }
     }
+}
+
+/// clap's "unrecognized subcommand 'sc_cat_item'" names neither what is valid
+/// nor how to proceed — it only suggests when the token is a near-miss of a real
+/// verb, which a table name never is. List the group's subcommands instead, so
+/// a caller (or an agent reading the JSON error) can recover in one step.
+fn subcommand_hint(err: &clap::Error) -> Option<String> {
+    if err.kind() != ErrorKind::InvalidSubcommand {
+        return None;
+    }
+    let (group, names) = sn::cli::valid_subcommands(err)?;
+    Some(format!("  `sn {group}` subcommands: {}", names.join(", ")))
 }
 
 fn run(cli: Cli) -> Result<()> {

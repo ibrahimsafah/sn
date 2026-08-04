@@ -56,7 +56,8 @@ Flags (global unless noted; every `sysparm_*` has a friendly name + raw `--syspa
 - `--display-value true|false|all` (list/get) — **defaults to `true`**: choice/reference fields
   come back as labels, and dates in the caller's timezone/locale (which will not round-trip into
   a query). `false` for raw values, `all` for both.
-- `--setlimit N` (list; default 1000; aliases `--limit`, `--page-size`) — max records
+- `--setlimit N` (list; aliases `--limit`, `--page-size`) — max records. Default 1000 on
+  `table`/`change`/`cmdb` list, 100 on `change task`, `attachment`, `catalog categories`/`items`
 - `--input-display-value` (writes) — set fields by display value
 - `--timeout SECS` (default 30) · `--pretty`/`--compact` (default: pretty on TTY, compact when piped)
 - `-d`/`-dd`/`-ddd` — log requests / +headers / +bodies to stderr (auth headers, cookies, and OAuth tokens masked); `-v`/`-V` = version

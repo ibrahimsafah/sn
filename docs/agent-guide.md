@@ -14,8 +14,8 @@ stdout, structured JSON errors on stderr, and stable exit codes.
 
 **stdout is always JSON** — pretty-printed on a TTY, compact when piped. The
 default shape is **unwrapped**: `sn` strips ServiceNow's `{"result": ...}`
-envelope. `list` and `schema` commands return an array; `get`/`create`/`update`/
-`replace` return one record object.
+envelope. `list` and `schema` commands return an array; `get`/`create`/`update`
+return one record object.
 
 Three output modes via `--output`:
 - `default` — unwrapped JSON (above).
@@ -160,8 +160,12 @@ than save an untested profile. Register it with `--no-verify` and have a human r
 `default_profile` in `config.toml` → error (`no profile selected`, exit 1). There
 is no implicit fallback.
 
+`-p` is a short alias for `--profile`. Both are global, so either may appear
+before or after the subcommand:
+
 ```bash
 sn --profile prod table list incident --limit 5
+sn table list incident --limit 5 -p prod          # identical
 ```
 
 A profile is the single unit of identity — instance URL + credentials together.
@@ -245,11 +249,16 @@ sn table create incident --field short_description="server down" --field state=2
 sn table list incident --query "active=true^priority=1" --fields "number,short_description,state" --setlimit 10
 ```
 ```json
-[{"number":"INC0010001","short_description":"Mail server down","state":"2"}]
+[{"number":"INC0010001","short_description":"Mail server down","state":"In Progress"}]
 ```
 
-`--limit` aliases `--setlimit` (SN's `sysparm_limit`); default is 1000 records
-per page. Drop it low (`--setlimit 5`) for exploration.
+`state` reads as a label, not `"2"`, because `--display-value` defaults to
+`true` — see [Display values](#display-values) before you feed any of it back.
+
+`--limit` aliases `--setlimit` (SN's `sysparm_limit`); the default is 1000 per
+page on `table list`, `change list`, and `cmdb list`, and 100 on `change task
+list`, `attachment list`, `catalog categories`, and `catalog items`. Drop it low
+(`--setlimit 5`) for exploration.
 
 ```bash
 # Get one record by sys_id (get takes a sys_id only — no --query)
@@ -258,25 +267,76 @@ sn table get incident a1b2c3d4e5f6
 
 To find one record by criteria, use `list --limit 1 --query "..."` and read `[0]`.
 
+**The read verb may be omitted on `table` and `cmdb`.** Both map to a REST path
+that is already `{noun}/{id}`, so for a read the verb is implied by whether you
+supplied an id:
+
+```bash
+sn table incident a1b2c3d4e5f6      # = sn table get incident a1b2c3d4e5f6
+sn table incident                   # = sn table list incident
+sn cmdb cmdb_ci_server ci001        # = sn cmdb get cmdb_ci_server ci001
+```
+
+Only `get` and `list` are ever inferred — **never a write** — and the choice is
+decided rather than guessed: `get` requires a second positional and `list`
+rejects one, so at most one of them can parse any given argv. A *near-miss* of a
+real verb stays a typo: `sn table lst incident` returns
+`tip: a similar subcommand exists: 'list'` rather than reading a table named
+`lst`.
+
+**The flip side, worth knowing when debugging:** a first token that is *not*
+close to any real verb is taken as a table name, because that is exactly what
+the shorthand is for. So `sn table bogus-verb incident` is not a usage error —
+it reads a table called `bogus-verb` and fails with ServiceNow's
+table-not-found (exit **2**), not `unrecognized subcommand` (exit 1). If you
+get an unexpected "invalid table" on `table` or `cmdb`, check whether you
+misspelled the *verb*.
+
+Groups whose first token isn't reliably a noun (`change`, `catalog`) are
+excluded from the shorthand, and an unrecognized subcommand there lists the
+valid ones:
+
+```
+$ sn change sc_cat_item abc
+error: unrecognized subcommand 'sc_cat_item'
+  `sn change` subcommands: list, get, create, update, delete, nextstates,
+  approvals, risk, schedule, task, ci, conflict, models, templates
+```
+
 ### Display values
 
-By default reference fields return sys_ids and choice fields return raw values,
-so `state: "2"` is unreadable without a lookup. `--display-value` asks
-ServiceNow to resolve them:
+**`--display-value` defaults to `true`.** Reads come back as readable labels —
+`state` is `"In Progress"`, not `"2"`; `assigned_to` is `"Abel Tuter"`, not a
+sys_id. This changed in 0.11.0; before that the default was `false`.
 
 | Value | Effect | Use when |
 |---|---|---|
-| `false` (default) | raw values | writing back, scripting |
-| `true` | display labels | human-readable output |
-| `all` | both — each field becomes `{"value","display_value"}` | you need both |
+| `true` (default) | display labels | reading, reporting, showing a human |
+| `false` | raw values and sys_ids | feeding a value back into a query or a write |
+| `all` | both — each field becomes `{"value","display_value"}` | you need to show one and send the other |
 
 ```bash
 sn table get incident a1b2c3d4e5f6 --display-value all
 # ... "state":{"value":"2","display_value":"In Progress"}, "priority":{"value":"1","display_value":"1 - Critical"}
 ```
 
-When echoing a value back into an update, always use the raw `value`, never
-`display_value`.
+**Two consequences that will bite a script.** Dates are also rewritten, into the
+calling user's timezone and locale — `2026-08-04 14:22:01` comes back as
+`08/04/2026 10:22:01 AM`, which **will not parse back into an encoded query**.
+And a reference field yields a name where you needed the sys_id to chain into
+the next call.
+
+So: **anything you intend to send back to ServiceNow must be read with
+`--display-value false`** (or `all`, reading the `value` side). Never echo a
+`display_value` into an update or a `--query`.
+
+```bash
+sn table get incident a1b2c3d4e5f6 --display-value false     # raw, round-trippable
+sn table list incident --query "sys_created_on>2026-08-01" --display-value false --fields sys_id
+```
+
+The default applies to `table`, `change`, `aggregate`, and `scores`. `sn watch`
+is unaffected — there `--display-value` only narrows a `--hydrate` fetch.
 
 ### Pagination & bulk processing
 
@@ -325,7 +385,7 @@ sn table list incident --query "active=true^priority=1^ORpriority=2^ORDERBYDESCs
 sn table list incident --query "assigned_to=6816f79c...^ORassigned_toISEMPTY"
 ```
 
-## Writing records (`create`, `update`, `replace`, `delete`)
+## Writing records (`create`, `update`, `delete`)
 
 **Body input** — two mutually exclusive ways (mixing them is exit 1):
 - `--field name=value` (repeatable): cleanest for a few fields, no JSON
@@ -347,14 +407,13 @@ untouched. Almost always what you want:
 sn table update incident c7d8e9f0a1b2 --field state=2 --field work_notes="Investigating"
 ```
 
-**`replace` = PUT** — despite PUT's REST convention, ServiceNow still applies
-it as a partial update: omitted fields keep their values, nothing is blanked.
-To clear a field, send it explicitly empty (`--field description=""`). Prefer
-`update`; `replace` exists for API fidelity:
+`update` is the **only** write verb. There is no `replace`: it issued PUT where
+`update` issues PATCH, but ServiceNow applies both as partial updates — omitted
+fields keep their values and nothing is blanked — so the two did the same thing
+while implying they did not. It was removed in 0.11.0; `sn table replace` now
+exits 1. Anything that called it should call `update` with the same body.
 
-```bash
-sn table replace incident c7d8e9f0a1b2 --data @full.json
-```
+To clear a field, send it explicitly empty: `--field description=""`.
 
 **`delete`** returns exit 0 with empty stdout. Non-interactive runs must pass
 `--yes` — without it, a non-TTY invocation exits 1 with a usage error (a TTY
@@ -384,16 +443,16 @@ apply across `table` and most other command groups.
 | Friendly flag | sysparm | Applies to | Notes |
 |---|---|---|---|
 | `--query <EQ>` | `sysparm_query` | list | Encoded query |
-| `--fields <csv>` | `sysparm_fields` | list/get/create/update/replace | Columns to return |
-| `--setlimit <N>` | `sysparm_limit` | list | Max/page, default 1000. Aliases `--limit`, `--page-size` |
+| `--fields <csv>` | `sysparm_fields` | list/get/create/update | Columns to return |
+| `--setlimit <N>` | `sysparm_limit` | list | Max/page; default 1000 (`table`/`change`/`cmdb` list) or 100 (`change task`, `attachment`, `catalog categories`/`items`). Aliases `--limit`, `--page-size` |
 | `--offset <N>` | `sysparm_offset` | list | Page offset |
-| `--display-value <false\|true\|all>` | `sysparm_display_value` | list/get/create/update/replace | See Display values |
-| `--input-display-value` | `sysparm_input_display_value` | create/update/replace | Resolve labels in request body |
-| `--exclude-reference-link` | `sysparm_exclude_reference_link` | list/get/create/update/replace | Drop `link` URL from references |
+| `--display-value <false\|true\|all>` | `sysparm_display_value` | list/get/create/update | See Display values |
+| `--input-display-value` | `sysparm_input_display_value` | create/update | Resolve labels in request body |
+| `--exclude-reference-link` | `sysparm_exclude_reference_link` | list/get/create/update | Drop `link` URL from references |
 | `--view <name>` | `sysparm_view` | list/get | Named form/list view |
-| `--query-no-domain` | `sysparm_query_no_domain` | list/get/update/replace/delete | Cross-domain if authorized |
+| `--query-no-domain` | `sysparm_query_no_domain` | list/get/update/delete | Cross-domain if authorized |
 | `--no-count` / `--suppress-pagination-header` | `sysparm_no_count` / `sysparm_suppress_pagination_header` | list | Skip count query (faster on big tables) |
-| `--suppress-auto-sys-field` | `sysparm_suppress_auto_sys_field` | create/update/replace | Skip system-field auto-gen |
+| `--suppress-auto-sys-field` | `sysparm_suppress_auto_sys_field` | create/update | Skip system-field auto-gen |
 | `--all` / `--array` / `--max-records <N>` | (CLI only) | list | Auto-paginate / array output / cap |
 | `--query-category <cat>` | `sysparm_query_category` | list | Index selection |
 | `--output`, `--profile`, `-d`/`-dd`/`-ddd` | (CLI only) | all | See relevant sections |
@@ -525,7 +584,7 @@ is always the first positional arg.
 sn cmdb list cmdb_ci_server --query "operational_status=1" --setlimit 10
 sn cmdb get cmdb_ci_server ci001                        # includes relations
 sn cmdb create cmdb_ci_server --field name=web-server-02 --field ip_address=10.0.1.51
-sn cmdb update cmdb_ci_server ci001 --field operational_status=2   # PATCH; replace = PUT (also a partial update)
+sn cmdb update cmdb_ci_server ci001 --field operational_status=2   # PATCH; the only write verb
 sn cmdb meta cmdb_ci_server                             # class schema
 sn cmdb relation add cmdb_ci_server ci001 --data '{"outbound_relations":[{"type":"<cmdb_rel_type_sys_id>","target":"<target_ci_sys_id>"}]}'
 sn cmdb relation delete cmdb_ci_server ci001 <rel_sys_id> --yes
@@ -766,6 +825,13 @@ generator never emits `--data` alongside `--field` (exit 1). Its inverse is
 tier `--help` renders — `Global options`, `Advanced options`, or `null` for a
 command's working set.
 
+Those tiers are the same ones `sn <command> --help` prints, in that order: the
+command's own flags first (unheaded, ordered by usefulness), then **Advanced
+options** — raw `sysparm_*` passthroughs like `--view`, `--query-category`,
+`--query-no-domain`, `--no-count` that most callers never touch — then **Global
+options**, the 11 flags every command accepts. When scanning help output for the
+flag you want, the first block is almost always the one that matters.
+
 `--help` and `--version` are omitted: they exit before any handler runs, so
 there is nothing for a generated tool to call. Nothing named `help` appears in
 the tree at all — clap's `help` subcommand mirrors every command as an
@@ -773,10 +839,13 @@ argument-less stub, and emitting it gave each real command a same-named twin.
 
 ## Common mistakes
 
-- **Reading for humans without `--display-value true`** → you report `state=2`
-  instead of `In Progress`. For writes, always use raw values.
-- **Expecting `replace` (PUT) to clear omitted fields** → it doesn't; ServiceNow
-  applies PUT as a partial update. Clear a field explicitly (`--field x=""`).
+- **Echoing a read straight back into a write or a `--query`** → `--display-value`
+  defaults to **`true`**, so you are holding `"In Progress"` and a localized date
+  like `08/04/2026 10:22:01 AM`, neither of which ServiceNow will accept back.
+  Read with `--display-value false` (or `all`, and send the `value` side).
+- **Reaching for `replace`** → it was removed in 0.11.0 and exits 1. `update` is
+  the only write verb; PUT and PATCH were both partial updates, so the two did
+  the same thing. Clear a field explicitly (`--field x=""`).
 - **Mixing `--data` and `--field`** → exit 1. Pick one.
 - **`--query` on `get`** → `get` takes a sys_id only; use `list --limit 1 --query "..."`.
 - **Missing `--yes` on `delete`** in CI/agent contexts → immediate exit 1 usage
@@ -788,7 +857,7 @@ argument-less stub, and emitting it gave each real command a same-named twin.
   never compute offsets.
 - **Trusting `sn_error` on transport errors (exit 3)** → it's null/absent; check
   `.error.message`.
-- **Pulling more than you need** → default `--setlimit` is 1000; lower it for
+- **Pulling more than you need** → `--setlimit` defaults to 1000 on the main list commands; lower it for
   exploration.
 
 ## Claude Code plugin
@@ -819,9 +888,9 @@ sn schema choices TABLE COLUMN
 sn table list TABLE [shared list flags] [--view N] [--query-category C] [--query-no-domain] [--no-count]
 sn table get  TABLE SYS_ID [--fields CSV] [--display-value ...] [--view N]
 sn table create  TABLE (--data JSON|@FILE|@- | --field K=V ...) [--fields CSV] [--display-value ...] [--input-display-value]
-sn table update  TABLE SYS_ID (--data ...|--field K=V ...) [same write flags]
-sn table replace TABLE SYS_ID (--data ...|--field K=V ...) [same write flags]      # PUT — SN still partial-updates
+sn table update  TABLE SYS_ID (--data ...|--field K=V ...) [same write flags]     # PATCH — the only write verb
 sn table delete  TABLE SYS_ID [--yes] [--query-no-domain]
+sn table TABLE [SYS_ID]                                                           # verb optional: = list / = get
 
 sn change list [--type normal|emergency|standard] [shared list flags]
 sn change get|update|delete SYS_ID [--type ...] [--yes]     sn change create [--type ...] [--template ID] (--data|--field)
@@ -835,7 +904,7 @@ sn attachment upload --table T --record SYS_ID --file PATH [--file-name N] [--co
 sn attachment download SYS_ID [--out PATH]
 
 sn cmdb list CLASS [--query EQ] [--setlimit N]       sn cmdb get CLASS SYS_ID      sn cmdb meta CLASS
-sn cmdb create|update|replace CLASS [SYS_ID] (--data|--field)
+sn cmdb create|update CLASS [SYS_ID] (--data|--field)   sn cmdb CLASS [SYS_ID]   # verb optional: = list / = get
 sn cmdb relation add CLASS SYS_ID (--data|--field)   sn cmdb relation delete CLASS SYS_ID REL_SYS_ID [--yes]
 
 sn import create STAGING_TABLE (--data|--field)     sn import bulk STAGING_TABLE --data JSON|@FILE|@-

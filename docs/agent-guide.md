@@ -738,10 +738,17 @@ sn introspect | jq '.subcommands[] | select(.name=="table")
                     | .subcommands[] | select(.name=="list") | .args[].name'
 ```
 
-Each entry in `args[]` carries `name`, `about`, `takes_value`, `positional`,
-`repeatable`, `aliases`, `default_values`, and `possible_values` — enough to
-generate an MCP tool or function-call schema. A `takes_value: false` arg is a
-valueless switch: emit `--all`, never `--all true`.
+Each entry in `args[]` carries `name`, `long`, `short`, `help`, `required`,
+`takes_value`, `positional`, `repeatable`, `aliases`, and `possible_values` —
+enough to generate an MCP tool or function-call schema. The help string is
+`help`, not `about`; `about` is the *command's* description. A
+`takes_value: false` arg is a valueless switch: emit `--all`, never
+`--all true`.
+
+`--help` and `--version` are omitted: they exit before any handler runs, so
+there is nothing for a generated tool to call. Nothing named `help` appears in
+the tree at all — clap's `help` subcommand mirrors every command as an
+argument-less stub, and emitting it gave each real command a same-named twin.
 
 ## Common mistakes
 

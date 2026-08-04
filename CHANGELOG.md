@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- **`sn introspect` no longer emits clap's generated `help` subcommand.** It mirrored the
+  whole command tree as argument-less stubs, so 274 of 391 nodes described nothing
+  callable and every real command had a same-named twin: `sn help table list` sat beside
+  `sn table list` with an empty `args`, indistinguishable to a schema generator. Any
+  recursive walk — including the one `docs/agent-guide.md` prescribed — saw mostly
+  phantoms. The tree is now 121 nodes (481 KB → 429 KB).
+
+  `--help` and `--version` are dropped from `args[]` too. They exit before any handler
+  runs, so there is nothing for a generated tool to call. The filter keys on clap's
+  *action*, not the argument name, because `sn app install --version <VERSION>` is a real
+  value-taking option that a name-based filter would have deleted.
+
 ## 0.11.0 (2026-08-04)
 
 ### Breaking changes

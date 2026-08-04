@@ -8,6 +8,8 @@ use std::io;
 pub fn run() -> Result<()> {
     // build() finalizes defaults, actions, and value parsers; without it,
     // num_args/actions are unset and every arg looks like it takes a value.
+    // It also generates the `help` subcommand, which mirrors the entire tree
+    // as arg-less stubs — describe_command filters that back out.
     let mut cmd = Cli::command();
     cmd.build();
     let tree = describe_command(&cmd, "sn");
@@ -18,11 +20,15 @@ pub fn run() -> Result<()> {
 fn describe_command(cmd: &ClapCommand, name: &str) -> Value {
     let args: Vec<Value> = cmd
         .get_arguments()
-        .filter(|a| !a.is_hide_set())
+        .filter(|a| !a.is_hide_set() && !is_builtin(a))
         .map(describe_arg)
         .collect();
+    // `help` is clap's, and it mirrors the whole tree as stubs that carry no
+    // args — emitting it doubles the node count with nodes that describe
+    // nothing callable, and gives every real command a same-named twin.
     let subs: Vec<Value> = cmd
         .get_subcommands()
+        .filter(|sc| sc.get_name() != "help" && !sc.is_hide_set())
         .map(|sc| describe_command(sc, sc.get_name()))
         .collect();
     json!({
@@ -31,6 +37,17 @@ fn describe_command(cmd: &ClapCommand, name: &str) -> Value {
         "args": args,
         "subcommands": subs,
     })
+}
+
+/// `--help` and `--version` are clap's own: they exit before any handler runs,
+/// so a generated tool schema has no use for them. Match on the action rather
+/// than the name — `sn app install --version <VERSION>` is a real option that
+/// takes a value, and filtering by name would delete it.
+fn is_builtin(a: &Arg) -> bool {
+    matches!(
+        a.get_action(),
+        ArgAction::Help | ArgAction::HelpShort | ArgAction::HelpLong | ArgAction::Version
+    )
 }
 
 fn describe_arg(a: &Arg) -> Value {

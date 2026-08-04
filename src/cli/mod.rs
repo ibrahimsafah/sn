@@ -71,11 +71,66 @@ pub use watch::{
     WatchTableArgs,
 };
 
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
 /// Help heading for raw `sysparm_*` passthroughs that most callers never touch.
 /// Keeps the default "Options" section down to the working set of each command.
 pub(crate) const ADVANCED: &str = "Advanced options";
+
+/// The command tree, with every usage line rewritten to put `[OPTIONS]` last.
+///
+/// clap renders `sn table list [OPTIONS] <TABLE>`, which reads as though flags
+/// come first; nobody types it that way. `override_usage` is verbatim, so each
+/// line is rebuilt from the command's own positionals and must carry the full
+/// path. Parsing is untouched — flags still work in any position.
+pub fn command() -> clap::Command {
+    with_usage(Cli::command(), "sn")
+}
+
+/// Parse argv through [`command`] so error messages carry the same usage lines
+/// as `--help`.
+pub fn parse() -> Result<Cli, clap::Error> {
+    let matches = command().try_get_matches()?;
+    Cli::from_arg_matches(&matches)
+}
+
+fn with_usage(cmd: clap::Command, path: &str) -> clap::Command {
+    let path = path.to_string();
+    let usage = usage_line(&path, &cmd);
+    cmd.override_usage(usage).mut_subcommands(move |sc| {
+        let child = format!("{} {}", path, sc.get_name());
+        with_usage(sc, &child)
+    })
+}
+
+/// `sn table get <TABLE> <SYS_ID> [OPTIONS]` for a leaf, `sn table <COMMAND>`
+/// for a group. Value names fall back to the uppercased arg id, which is what
+/// clap would derive anyway — the tree is walked before `build()` fills them in.
+fn usage_line(path: &str, cmd: &clap::Command) -> String {
+    let mut usage = String::from(path);
+    if cmd.get_subcommands().next().is_some() {
+        usage.push_str(" <COMMAND>");
+        return usage;
+    }
+    for arg in cmd.get_positionals() {
+        let name = arg
+            .get_value_names()
+            .and_then(|names| names.first())
+            .map(|n| n.to_string())
+            .unwrap_or_else(|| arg.get_id().as_str().to_uppercase());
+        usage.push(' ');
+        if arg.is_required_set() {
+            usage.push_str(&format!("<{name}>"));
+        } else {
+            usage.push_str(&format!("[{name}]"));
+        }
+        if matches!(arg.get_action(), clap::ArgAction::Append) {
+            usage.push_str("...");
+        }
+    }
+    usage.push_str(" [OPTIONS]");
+    usage
+}
 
 #[derive(Parser, Debug)]
 #[command(

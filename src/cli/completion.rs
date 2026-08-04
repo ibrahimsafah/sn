@@ -1,4 +1,3 @@
-use clap::CommandFactory;
 use clap_complete::generate;
 use std::io;
 
@@ -32,7 +31,7 @@ pub struct CompletionArgs {
 
 /// Emit a shell completion script for the chosen shell to stdout.
 pub fn run(args: CompletionArgs) -> crate::error::Result<()> {
-    let mut cmd = <crate::cli::Cli as CommandFactory>::command();
+    let mut cmd = crate::cli::command();
     let shell: clap_complete::Shell = args.shell.into();
     let mut out = io::stdout().lock();
     generate(shell, &mut cmd, "sn", &mut out);

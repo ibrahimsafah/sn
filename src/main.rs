@@ -1,5 +1,4 @@
 use clap::error::ErrorKind;
-use clap::Parser;
 use is_terminal::IsTerminal;
 use sn::cli::{
     AppSub, AtfSub, AttachmentSub, AuthSub, CatalogSub, ChangeSub, Cli, CmdbSub, Command,
@@ -11,7 +10,7 @@ use std::io;
 use std::process::ExitCode;
 
 fn main() -> ExitCode {
-    let cli = match Cli::try_parse() {
+    let cli = match sn::cli::parse() {
         Ok(cli) => cli,
         Err(err) => return handle_clap_error(err),
     };

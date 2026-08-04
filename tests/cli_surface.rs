@@ -13,7 +13,35 @@ use wiremock::{Mock, ResponseTemplate};
 
 
 
+/// Usage reads in the order people type: positionals, then flags.
+#[test]
+fn usage_puts_options_last() {
+    let out = Command::cargo_bin("sn")
+        .unwrap()
+        .args(["table", "get", "--help"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("Usage: sn table get <TABLE> <SYS_ID> [OPTIONS]"),
+        "usage line not reordered:\n{stdout}"
+    );
+}
 
+/// A command group advertises its subcommands, not its flags.
+#[test]
+fn group_usage_names_the_subcommand_slot() {
+    let out = Command::cargo_bin("sn")
+        .unwrap()
+        .args(["table", "--help"])
+        .assert()
+        .success();
+    let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+    assert!(
+        stdout.contains("Usage: sn table <COMMAND>"),
+        "group usage line not reordered:\n{stdout}"
+    );
+}
 
 /// 123 arguments across 54 commands once had no help text at all, so
 /// `sn table get --help` listed bare flag names. Introspect is the audit.

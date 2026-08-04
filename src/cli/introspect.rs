@@ -18,15 +18,25 @@ pub fn run(global: &GlobalFlags) -> Result<()> {
     // Stamped at the root only, so a consumer caching generated schemas can
     // tell which binary produced the tree and invalidate on an upgrade.
     tree["version"] = json!(env!("CARGO_PKG_VERSION"));
+    // clap propagates the globals onto every node, so serializing them per node
+    // spent three quarters of the output repeating eleven flags. They are
+    // emitted once here instead: the args a command accepts are its own `args`
+    // plus these.
+    tree["global_args"] = json!(describe_args(&cmd, true));
     write_response(global, &tree)
 }
 
-fn describe_command(cmd: &ClapCommand, name: &str) -> Value {
-    let args: Vec<Value> = cmd
-        .get_arguments()
-        .filter(|a| !a.is_hide_set() && !is_builtin(a))
+/// `propagated` picks the global flags — emitted once at the root as
+/// `global_args` — or a command's own, which stay on the command.
+fn describe_args(cmd: &ClapCommand, propagated: bool) -> Vec<Value> {
+    cmd.get_arguments()
+        .filter(|a| !a.is_hide_set() && !is_builtin(a) && a.is_global_set() == propagated)
         .map(|a| describe_arg(cmd, a))
-        .collect();
+        .collect()
+}
+
+fn describe_command(cmd: &ClapCommand, name: &str) -> Value {
+    let args = describe_args(cmd, false);
     // `help` is clap's, and it mirrors the whole tree as stubs that carry no
     // args — emitting it doubles the node count with nodes that describe
     // nothing callable, and gives every real command a same-named twin.

@@ -741,10 +741,22 @@ sn introspect | jq '.subcommands[] | select(.name=="table")
 Each entry in `args[]` carries `name`, `long`, `short`, `help`, `help_heading`,
 `required`, `takes_value`, `value_name`, `positional`, `repeatable`, `aliases`,
 `default_values`, `possible_values`, and `conflicts_with` — enough to generate
-an MCP tool or function-call schema. The root additionally carries `version`,
-the binary that produced the tree. The help string is `help`, not `about`;
+an MCP tool or function-call schema. The help string is `help`, not `about`;
 `about` is the *command's* description. A `takes_value: false` arg is a
 valueless switch: emit `--all`, never `--all true`.
+
+The root carries two extra keys: `version` (the binary that produced the tree)
+and `global_args` (the 11 flags clap propagates to every command). **A command's
+effective flags are its own `args` plus the root's `global_args`** — non-global
+args do not propagate, so there is no ancestor chain to walk. They sit at the
+root because repeating them on all 121 nodes was three quarters of the output.
+
+```bash
+# Everything `table list` accepts:
+sn introspect | jq '[.global_args[], (.subcommands[] | select(.name=="table")
+                     | .subcommands[] | select(.name=="list") | .args[])]
+                    | map(.name)'
+```
 
 `conflicts_with` lists the arg ids that cannot be combined with this one, so a
 generator never emits `--data` alongside `--field` (exit 1). Its inverse is

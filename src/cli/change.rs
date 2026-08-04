@@ -1,6 +1,6 @@
 use crate::body::{build_body, BodyInput};
 use crate::cli::table::{build_client, build_profile, confirm_delete, unwrap_or_raw};
-use crate::cli::{DisplayValueArg, GlobalFlags};
+use crate::cli::{DisplayValueArg, GlobalFlags, ADVANCED};
 use crate::error::{Error, Result};
 use clap::{Subcommand, ValueEnum};
 
@@ -58,35 +58,47 @@ pub struct ChangeListArgs {
     /// Filter by change type.
     #[arg(long, value_enum)]
     pub r#type: Option<ChangeType>,
+    /// Encoded query, e.g. `active=true^priority=1`.
     #[arg(long, short = 'q', alias = "sysparm-query")]
     pub query: Option<String>,
+    /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
+    /// Maximum records returned. Maps to sysparm_limit.
     #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 1000)]
     pub setlimit: u32,
+    /// Starting offset for manual pagination.
     #[arg(long, alias = "sysparm-offset")]
     pub offset: Option<u32>,
+    /// Resolve reference/choice fields: false (default), true, or all.
     #[arg(long, alias = "sysparm-display-value", value_enum)]
     pub display_value: Option<DisplayValueArg>,
-    #[arg(long, alias = "sysparm-exclude-reference-link")]
+    /// Strip reference-link URLs from reference fields.
+    #[arg(long, alias = "sysparm-exclude-reference-link", help_heading = ADVANCED)]
     pub exclude_reference_link: bool,
-    #[arg(long, alias = "sysparm-view")]
+    /// Apply a named form/list view.
+    #[arg(long, alias = "sysparm-view", help_heading = ADVANCED)]
     pub view: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeGetArgs {
+    /// sys_id of the change request.
     pub sys_id: String,
     /// Get a specific change type (uses type-specific endpoint).
     #[arg(long, value_enum)]
     pub r#type: Option<ChangeType>,
+    /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
+    /// Resolve reference/choice fields: false (default), true, or all.
     #[arg(long, alias = "sysparm-display-value", value_enum)]
     pub display_value: Option<DisplayValueArg>,
-    #[arg(long, alias = "sysparm-exclude-reference-link")]
+    /// Strip reference-link URLs from reference fields.
+    #[arg(long, alias = "sysparm-exclude-reference-link", help_heading = ADVANCED)]
     pub exclude_reference_link: bool,
-    #[arg(long, alias = "sysparm-view")]
+    /// Apply a named form/list view.
+    #[arg(long, alias = "sysparm-view", help_heading = ADVANCED)]
     pub view: Option<String>,
 }
 
@@ -104,15 +116,19 @@ pub struct ChangeCreateArgs {
     /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
     #[arg(long = "field", short = 'F', conflicts_with = "data")]
     pub field: Vec<String>,
+    /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
+    /// Resolve reference/choice fields: false (default), true, or all.
     #[arg(long, alias = "sysparm-display-value", value_enum)]
     pub display_value: Option<DisplayValueArg>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeUpdateArgs {
+    /// sys_id of the change request.
     pub sys_id: String,
+    /// Change type: normal, emergency, or standard.
     #[arg(long, value_enum)]
     pub r#type: Option<ChangeType>,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
@@ -121,15 +137,19 @@ pub struct ChangeUpdateArgs {
     /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
     #[arg(long = "field", short = 'F', conflicts_with = "data")]
     pub field: Vec<String>,
+    /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
+    /// Resolve reference/choice fields: false (default), true, or all.
     #[arg(long, alias = "sysparm-display-value", value_enum)]
     pub display_value: Option<DisplayValueArg>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeDeleteArgs {
+    /// sys_id of the change request.
     pub sys_id: String,
+    /// Change type: normal, emergency, or standard.
     #[arg(long, value_enum)]
     pub r#type: Option<ChangeType>,
     /// Skip confirmation prompt (required for non-interactive use).
@@ -139,16 +159,19 @@ pub struct ChangeDeleteArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeSysIdArg {
+    /// sys_id of the change request.
     pub sys_id: String,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeOptionalIdArg {
+    /// sys_id to fetch; omit to list all.
     pub sys_id: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeApprovalsArgs {
+    /// sys_id of the change request.
     pub sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -160,6 +183,7 @@ pub struct ChangeApprovalsArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeRiskArgs {
+    /// sys_id of the change request.
     pub sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -185,21 +209,27 @@ pub enum ChangeTaskSub {
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeTaskListArgs {
+    /// sys_id of the parent change request.
     pub change_sys_id: String,
+    /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
+    /// Maximum records returned. Maps to sysparm_limit.
     #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 100)]
     pub setlimit: u32,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeTaskGetArgs {
+    /// sys_id of the parent change request.
     pub change_sys_id: String,
+    /// sys_id of the change task.
     pub task_sys_id: String,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeTaskCreateArgs {
+    /// sys_id of the parent change request.
     pub change_sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -211,7 +241,9 @@ pub struct ChangeTaskCreateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeTaskUpdateArgs {
+    /// sys_id of the parent change request.
     pub change_sys_id: String,
+    /// sys_id of the change task.
     pub task_sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -223,7 +255,9 @@ pub struct ChangeTaskUpdateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeTaskDeleteArgs {
+    /// sys_id of the parent change request.
     pub change_sys_id: String,
+    /// sys_id of the change task.
     pub task_sys_id: String,
     /// Skip confirmation prompt (required for non-interactive use).
     #[arg(long, short = 'y')]
@@ -240,6 +274,7 @@ pub enum ChangeCiSub {
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeCiAddArgs {
+    /// sys_id of the parent change request.
     pub change_sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -261,6 +296,7 @@ pub enum ChangeConflictSub {
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeConflictAddArgs {
+    /// sys_id of the change request.
     pub sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]

@@ -27,22 +27,28 @@ pub enum CmdbSub {
 pub struct CmdbListArgs {
     /// CMDB class name (e.g. `cmdb_ci_server`).
     pub class: String,
+    /// Encoded query, e.g. `active=true^priority=1`.
     #[arg(long, short = 'q', alias = "sysparm-query")]
     pub query: Option<String>,
+    /// Maximum records returned. Maps to sysparm_limit.
     #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 1000)]
     pub setlimit: u32,
+    /// Starting offset for manual pagination.
     #[arg(long, alias = "sysparm-offset")]
     pub offset: Option<u32>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbGetArgs {
+    /// CMDB class name (e.g. `cmdb_ci_linux_server`).
     pub class: String,
+    /// sys_id of the CI.
     pub sys_id: String,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbCreateArgs {
+    /// CMDB class name (e.g. `cmdb_ci_linux_server`).
     pub class: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -54,7 +60,9 @@ pub struct CmdbCreateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbUpdateArgs {
+    /// CMDB class name (e.g. `cmdb_ci_linux_server`).
     pub class: String,
+    /// sys_id of the CI.
     pub sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -66,6 +74,7 @@ pub struct CmdbUpdateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbMetaArgs {
+    /// CMDB class name (e.g. `cmdb_ci_linux_server`).
     pub class: String,
 }
 
@@ -79,7 +88,9 @@ pub enum CmdbRelationSub {
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbRelationAddArgs {
+    /// CMDB class name (e.g. `cmdb_ci_linux_server`).
     pub class: String,
+    /// sys_id of the CI.
     pub sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -91,7 +102,9 @@ pub struct CmdbRelationAddArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbRelationDeleteArgs {
+    /// CMDB class name (e.g. `cmdb_ci_linux_server`).
     pub class: String,
+    /// sys_id of the CI.
     pub sys_id: String,
     /// sys_id of the relation to delete.
     pub rel_sys_id: String,

@@ -1,5 +1,5 @@
 use crate::body::{build_body, BodyInput};
-use crate::cli::{GlobalFlags, OutputMode};
+use crate::cli::{GlobalFlags, OutputMode, ADVANCED};
 use crate::client::{Auth, Client};
 use crate::config::{
     config_path, credentials_path, load_config_from, load_credentials_from, resolve_profile,
@@ -72,22 +72,30 @@ pub struct TableListArgs {
     #[arg(long, alias = "sysparm-display-value", value_enum)]
     pub display_value: Option<DisplayValueArg>,
     /// Strip reference-link URLs from reference fields.
-    #[arg(long, alias = "sysparm-exclude-reference-link")]
+    #[arg(
+        long,
+        alias = "sysparm-exclude-reference-link",
+        help_heading = ADVANCED
+    )]
     pub exclude_reference_link: bool,
     /// Skip X-Total-Count calculation.
-    #[arg(long, alias = "sysparm-suppress-pagination-header")]
+    #[arg(
+        long,
+        alias = "sysparm-suppress-pagination-header",
+        help_heading = ADVANCED
+    )]
     pub suppress_pagination_header: bool,
     /// Apply a named form/list view.
-    #[arg(long, alias = "sysparm-view")]
+    #[arg(long, alias = "sysparm-view", help_heading = ADVANCED)]
     pub view: Option<String>,
     /// Query category for index selection.
-    #[arg(long, alias = "sysparm-query-category")]
+    #[arg(long, alias = "sysparm-query-category", help_heading = ADVANCED)]
     pub query_category: Option<String>,
     /// Cross-domain access if authorized.
-    #[arg(long, alias = "sysparm-query-no-domain")]
+    #[arg(long, alias = "sysparm-query-no-domain", help_heading = ADVANCED)]
     pub query_no_domain: bool,
     /// Skip the count query.
-    #[arg(long, alias = "sysparm-no-count")]
+    #[arg(long, alias = "sysparm-no-count", help_heading = ADVANCED)]
     pub no_count: bool,
     /// Auto-paginate: stream every matching record (JSONL unless --array).
     #[arg(long)]
@@ -102,22 +110,34 @@ pub struct TableListArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct TableGetArgs {
+    /// Table name (e.g. `incident`).
     pub table: String,
+    /// sys_id of the record to fetch.
     pub sys_id: String,
+    /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
+    /// Resolve reference/choice fields: false (default), true, or all.
     #[arg(long, alias = "sysparm-display-value", value_enum)]
     pub display_value: Option<DisplayValueArg>,
-    #[arg(long, alias = "sysparm-exclude-reference-link")]
+    /// Strip reference-link URLs from reference fields.
+    #[arg(
+        long,
+        alias = "sysparm-exclude-reference-link",
+        help_heading = ADVANCED
+    )]
     pub exclude_reference_link: bool,
-    #[arg(long, alias = "sysparm-view")]
+    /// Apply a named form/list view.
+    #[arg(long, alias = "sysparm-view", help_heading = ADVANCED)]
     pub view: Option<String>,
-    #[arg(long, alias = "sysparm-query-no-domain")]
+    /// Cross-domain access if authorized.
+    #[arg(long, alias = "sysparm-query-no-domain", help_heading = ADVANCED)]
     pub query_no_domain: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct TableCreateArgs {
+    /// Table name (e.g. `incident`).
     pub table: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -125,23 +145,39 @@ pub struct TableCreateArgs {
     /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
     #[arg(long = "field", short = 'F', conflicts_with = "data")]
     pub field: Vec<String>,
+    /// Comma-separated fields to return on the created record.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
+    /// Resolve reference/choice fields: false (default), true, or all.
     #[arg(long, alias = "sysparm-display-value", value_enum)]
     pub display_value: Option<DisplayValueArg>,
-    #[arg(long, alias = "sysparm-exclude-reference-link")]
+    /// Strip reference-link URLs from reference fields.
+    #[arg(
+        long,
+        alias = "sysparm-exclude-reference-link",
+        help_heading = ADVANCED
+    )]
     pub exclude_reference_link: bool,
-    #[arg(long, alias = "sysparm-input-display-value")]
+    /// Interpret submitted values as display values (e.g. a user's name instead of its sys_id).
+    #[arg(long, alias = "sysparm-input-display-value", help_heading = ADVANCED)]
     pub input_display_value: bool,
-    #[arg(long, alias = "sysparm-suppress-auto-sys-field")]
+    /// Suppress auto-generation of the sys_created/sys_updated audit fields.
+    #[arg(
+        long,
+        alias = "sysparm-suppress-auto-sys-field",
+        help_heading = ADVANCED
+    )]
     pub suppress_auto_sys_field: bool,
-    #[arg(long, alias = "sysparm-view")]
+    /// Apply a named form/list view.
+    #[arg(long, alias = "sysparm-view", help_heading = ADVANCED)]
     pub view: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct TableUpdateArgs {
+    /// Table name (e.g. `incident`).
     pub table: String,
+    /// sys_id of the record to patch.
     pub sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -149,30 +185,48 @@ pub struct TableUpdateArgs {
     /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
     #[arg(long = "field", short = 'F', conflicts_with = "data")]
     pub field: Vec<String>,
+    /// Comma-separated fields to return on the updated record.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
+    /// Resolve reference/choice fields: false (default), true, or all.
     #[arg(long, alias = "sysparm-display-value", value_enum)]
     pub display_value: Option<DisplayValueArg>,
-    #[arg(long, alias = "sysparm-exclude-reference-link")]
+    /// Strip reference-link URLs from reference fields.
+    #[arg(
+        long,
+        alias = "sysparm-exclude-reference-link",
+        help_heading = ADVANCED
+    )]
     pub exclude_reference_link: bool,
-    #[arg(long, alias = "sysparm-input-display-value")]
+    /// Interpret submitted values as display values (e.g. a user's name instead of its sys_id).
+    #[arg(long, alias = "sysparm-input-display-value", help_heading = ADVANCED)]
     pub input_display_value: bool,
-    #[arg(long, alias = "sysparm-suppress-auto-sys-field")]
+    /// Suppress auto-generation of the sys_created/sys_updated audit fields.
+    #[arg(
+        long,
+        alias = "sysparm-suppress-auto-sys-field",
+        help_heading = ADVANCED
+    )]
     pub suppress_auto_sys_field: bool,
-    #[arg(long, alias = "sysparm-view")]
+    /// Apply a named form/list view.
+    #[arg(long, alias = "sysparm-view", help_heading = ADVANCED)]
     pub view: Option<String>,
-    #[arg(long, alias = "sysparm-query-no-domain")]
+    /// Cross-domain access if authorized.
+    #[arg(long, alias = "sysparm-query-no-domain", help_heading = ADVANCED)]
     pub query_no_domain: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct TableDeleteArgs {
+    /// Table name (e.g. `incident`).
     pub table: String,
+    /// sys_id of the record to delete.
     pub sys_id: String,
     /// Skip confirmation prompt (required for non-interactive use).
     #[arg(long, short = 'y')]
     pub yes: bool,
-    #[arg(long, alias = "sysparm-query-no-domain")]
+    /// Cross-domain access if authorized.
+    #[arg(long, alias = "sysparm-query-no-domain", help_heading = ADVANCED)]
     pub query_no_domain: bool,
 }
 

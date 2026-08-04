@@ -73,6 +73,10 @@ pub use watch::{
 
 use clap::{Parser, Subcommand, ValueEnum};
 
+/// Help heading for raw `sysparm_*` passthroughs that most callers never touch.
+/// Keeps the default "Options" section down to the working set of each command.
+pub(crate) const ADVANCED: &str = "Advanced options";
+
 #[derive(Parser, Debug)]
 #[command(
     name = "sn",
@@ -94,7 +98,12 @@ pub struct Cli {
     version: (),
 }
 
+/// Flags accepted by every command. They carry their own help heading so they
+/// sink to the bottom of `--help` instead of interleaving with each command's
+/// own flags — clap gives every `Args` container its own display-order counter
+/// and merges them, which otherwise zippers 11 globals through the list.
 #[derive(clap::Args, Debug, Clone, Default)]
+#[command(next_help_heading = "Global options")]
 pub struct GlobalFlags {
     /// Profile name (overrides default_profile).
     #[arg(long, global = true)]

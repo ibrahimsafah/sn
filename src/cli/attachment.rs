@@ -21,16 +21,20 @@ pub enum AttachmentSub {
 
 #[derive(clap::Args, Debug)]
 pub struct AttachmentListArgs {
+    /// Encoded query, e.g. `active=true^priority=1`.
     #[arg(long, short = 'q', alias = "sysparm-query")]
     pub query: Option<String>,
+    /// Maximum records returned. Maps to sysparm_limit.
     #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 100)]
     pub setlimit: u32,
+    /// Starting offset for manual pagination.
     #[arg(long, alias = "sysparm-offset")]
     pub offset: Option<u32>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct AttachmentGetArgs {
+    /// sys_id of the attachment.
     pub sys_id: String,
 }
 
@@ -58,6 +62,7 @@ pub struct AttachmentUploadArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct AttachmentDownloadArgs {
+    /// sys_id of the attachment.
     pub sys_id: String,
     /// Write the file here. Defaults to stdout.
     ///
@@ -72,6 +77,7 @@ pub struct AttachmentDownloadArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct AttachmentDeleteArgs {
+    /// sys_id of the attachment.
     pub sys_id: String,
     /// Skip confirmation prompt (required for non-interactive use).
     #[arg(long, short = 'y')]

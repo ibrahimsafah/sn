@@ -1,9 +1,12 @@
-use crate::cli::{DisplayValueArg, GlobalFlags};
+use crate::cli::{DisplayValueArg, GlobalFlags, ADVANCED};
 use crate::error::Result;
 use crate::output::emit_value;
 use clap::{Subcommand, ValueEnum};
 
 use super::table::{build_client, build_profile, format_from_flags, unwrap_or_raw};
+
+/// Score-series options, which only take effect alongside --include-scores.
+const SCORE_DATA: &str = "Score data options";
 
 #[derive(Subcommand, Debug)]
 pub enum ScoresSub {
@@ -30,7 +33,7 @@ pub struct ScoresListArgs {
     #[arg(long, alias = "sysparm-elements-filter")]
     pub elements_filter: Option<String>,
     /// Display value: true, false, or all.
-    #[arg(long, alias = "sysparm-display", value_enum)]
+    #[arg(long, alias = "sysparm-display", help_heading = ADVANCED, value_enum)]
     pub display: Option<DisplayValueArg>,
     /// Return only favorites.
     #[arg(long, alias = "sysparm-favorites")]
@@ -59,47 +62,47 @@ pub struct ScoresListArgs {
     /// Sort direction.
     #[arg(long, alias = "sysparm-sortdir", value_enum)]
     pub sort_dir: Option<SortDir>,
-    /// Resolve reference/choice display values: true, false, or all.
+    /// Resolve reference/choice fields: false (default), true, or all.
     #[arg(long, alias = "sysparm-display-value", value_enum)]
     pub display_value: Option<DisplayValueArg>,
     /// Exclude reference link URLs from the response.
-    #[arg(long, alias = "sysparm-exclude-reference-link")]
+    #[arg(long, alias = "sysparm-exclude-reference-link", help_heading = ADVANCED)]
     pub exclude_reference_link: bool,
     /// Include historical score data.
-    #[arg(long, alias = "sysparm-include-scores")]
+    #[arg(long, alias = "sysparm-include-scores", help_heading = SCORE_DATA)]
     pub include_scores: bool,
     /// Start of score date range (ISO-8601).
-    #[arg(long, alias = "sysparm-from")]
+    #[arg(long, alias = "sysparm-from", help_heading = SCORE_DATA)]
     pub from: Option<String>,
     /// End of score date range (ISO-8601).
-    #[arg(long, alias = "sysparm-to")]
+    #[arg(long, alias = "sysparm-to", help_heading = SCORE_DATA)]
     pub to: Option<String>,
     /// Step between scores.
-    #[arg(long, alias = "sysparm-step")]
+    #[arg(long, alias = "sysparm-step", help_heading = SCORE_DATA)]
     pub step: Option<u32>,
     /// Maximum number of scores to return (-1 = all).
-    #[arg(long, alias = "sysparm-limit")]
+    #[arg(long, alias = "sysparm-limit", help_heading = SCORE_DATA)]
     pub limit: Option<i64>,
     /// Include available breakdowns in the response.
-    #[arg(long, alias = "sysparm-include-available-breakdowns")]
+    #[arg(long, alias = "sysparm-include-available-breakdowns", help_heading = ADVANCED)]
     pub include_available_breakdowns: bool,
     /// Include available aggregates in the response.
-    #[arg(long, alias = "sysparm-include-available-aggregates")]
+    #[arg(long, alias = "sysparm-include-available-aggregates", help_heading = ADVANCED)]
     pub include_available_aggregates: bool,
     /// Include real-time score data.
-    #[arg(long, alias = "sysparm-include-realtime")]
+    #[arg(long, alias = "sysparm-include-realtime", help_heading = SCORE_DATA)]
     pub include_realtime: bool,
     /// Include target color scheme.
-    #[arg(long, alias = "sysparm-include-target-color-scheme")]
+    #[arg(long, alias = "sysparm-include-target-color-scheme", help_heading = ADVANCED)]
     pub include_target_color_scheme: bool,
     /// Include forecast scores.
-    #[arg(long, alias = "sysparm-include-forecast-scores")]
+    #[arg(long, alias = "sysparm-include-forecast-scores", help_heading = SCORE_DATA)]
     pub include_forecast_scores: bool,
     /// Include trendline scores.
-    #[arg(long, alias = "sysparm-include-trendline-scores")]
+    #[arg(long, alias = "sysparm-include-trendline-scores", help_heading = SCORE_DATA)]
     pub include_trendline_scores: bool,
     /// Include prediction interval data.
-    #[arg(long, alias = "sysparm-include-prediction-interval")]
+    #[arg(long, alias = "sysparm-include-prediction-interval", help_heading = SCORE_DATA)]
     pub include_prediction_interval: bool,
 }
 

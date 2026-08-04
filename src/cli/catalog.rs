@@ -49,6 +49,7 @@ pub struct CatalogListArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CatalogGetArgs {
+    /// sys_id of the catalog.
     pub sys_id: String,
 }
 
@@ -56,8 +57,10 @@ pub struct CatalogGetArgs {
 pub struct CatalogCategoriesArgs {
     /// Catalog sys_id.
     pub catalog_sys_id: String,
+    /// Maximum records returned. Maps to sysparm_limit.
     #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 100)]
     pub setlimit: u32,
+    /// Starting offset for manual pagination.
     #[arg(long, alias = "sysparm-offset")]
     pub offset: Option<u32>,
     /// Show only top-level categories.
@@ -67,6 +70,7 @@ pub struct CatalogCategoriesArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CatalogCategoryArgs {
+    /// sys_id of the category.
     pub sys_id: String,
 }
 
@@ -84,19 +88,23 @@ pub struct CatalogItemsArgs {
     /// Filter by type (e.g. `record_producer`).
     #[arg(long, alias = "sysparm-type")]
     pub item_type: Option<String>,
+    /// Maximum records returned. Maps to sysparm_limit.
     #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 100)]
     pub setlimit: u32,
+    /// Starting offset for manual pagination.
     #[arg(long, alias = "sysparm-offset")]
     pub offset: Option<u32>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct CatalogItemArgs {
+    /// sys_id of the catalog item.
     pub sys_id: String,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct CatalogOrderArgs {
+    /// sys_id of the catalog item.
     pub sys_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -108,6 +116,7 @@ pub struct CatalogOrderArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CatalogCartUpdateArgs {
+    /// sys_id of the cart item.
     pub cart_item_id: String,
     /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
     #[arg(long, short = 'D', conflicts_with = "field")]
@@ -119,6 +128,7 @@ pub struct CatalogCartUpdateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CatalogCartItemArgs {
+    /// sys_id of the cart item.
     pub cart_item_id: String,
 }
 

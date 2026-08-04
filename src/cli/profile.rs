@@ -16,14 +16,21 @@ use std::io::{self, Read, Write};
 pub enum ProfileSub {
     /// Add a profile. Leaves the default profile alone (see `sn profile use`).
     Add(ProfileAddArgs),
+    /// List every configured profile.
     List,
+    /// Show one profile's settings (secrets redacted).
     Show {
+        /// Profile to show; defaults to the selected profile.
         name: Option<String>,
     },
+    /// Delete a profile and its stored credentials.
     Remove {
+        /// Profile to remove.
         name: String,
     },
+    /// Make a profile the default for subsequent commands.
     Use {
+        /// Profile to make default.
         name: String,
     },
 }

@@ -6,39 +6,53 @@ use serde_json::Value;
 
 #[derive(Subcommand, Debug)]
 pub enum SchemaSub {
+    /// List every table on the instance.
     Tables(SchemaTablesArgs),
+    /// List a table's columns, with type, mandatory and reference metadata.
     Columns(SchemaColumnsArgs),
+    /// List the choice values available for one column.
     Choices(SchemaChoicesArgs),
 }
 
 #[derive(clap::Args, Debug, Default)]
 pub struct SchemaTablesArgs {
+    /// Case-insensitive substring filter on table name or label.
     #[arg(long)]
     pub filter: Option<String>,
+    /// Only tables that are referenced by another table.
     #[arg(long)]
     pub reference_only: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct SchemaColumnsArgs {
+    /// Table name (e.g. `incident`).
     pub table: String,
+    /// Case-insensitive substring filter on column name or label.
     #[arg(long)]
     pub filter: Option<String>,
+    /// Only columns of this internal type (e.g. `string`, `reference`).
     #[arg(long, value_name = "TYPE")]
     pub r#type: Option<String>,
+    /// Only mandatory columns.
     #[arg(long)]
     pub mandatory: bool,
+    /// Only columns the caller can write.
     #[arg(long)]
     pub writable: bool,
+    /// Only columns backed by a choice list.
     #[arg(long)]
     pub choices_only: bool,
+    /// Only reference columns.
     #[arg(long)]
     pub references_only: bool,
 }
 
 #[derive(clap::Args, Debug, Default)]
 pub struct SchemaChoicesArgs {
+    /// Table name (e.g. `incident`).
     pub table: String,
+    /// Column to read the choice list from (e.g. `state`).
     pub field: String,
 }
 

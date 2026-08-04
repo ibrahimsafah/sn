@@ -26,6 +26,23 @@
   One relation stays out of reach: clap keeps `requires` private, so `--wait-timeout`
   requiring `--wait` is still only prose in that flag's `help`.
 
+- **`sn raw -H/--header 'Name: Value'`** — send request headers on the REST passthrough,
+  curl-style and repeatable. Endpoints that need one (`X-no-response-body`, Scripted REST
+  API custom headers, `Accept` negotiation, `X-UserToken`) were previously unreachable,
+  since `sn raw` could only vary method, path, query, and body.
+
+  Caller headers are applied last, after the client's own, so they win — `Content-Type`
+  included. Repeating a name sends it twice. A malformed header is a usage error (exit 1),
+  not a panic.
+
+  `Authorization` is refused: a profile is the whole unit of identity in this CLI, and a
+  credential passed in argv is visible to `ps` and to shell history. Configure identity
+  with `sn init` or `sn profile add`.
+
+  Both directions stay JSON regardless of the headers set. Responses are parsed as JSON,
+  so `Accept: text/xml` fetches XML and then fails to parse; `--data`/`--field` always
+  serialize JSON, so `Content-Type: application/xml` only mislabels a JSON body.
+
 ### Fixed
 
 - **`sn introspect` honors the global output flags it accepts.** `--pretty`, `--compact`,

@@ -10,6 +10,7 @@ use crate::output::{emit_value, Format, ResolvedFormat};
 use crate::query::{DeleteQuery, GetQuery, ListQuery, WriteQuery};
 use clap::{Subcommand, ValueEnum};
 use is_terminal::IsTerminal;
+use reqwest::header::HeaderMap;
 use serde_json::Value;
 use std::io;
 use std::time::Duration;
@@ -329,7 +330,20 @@ pub(crate) fn build_profile(global: &GlobalFlags) -> Result<ResolvedProfile> {
 }
 
 pub(crate) fn build_client(profile: &ResolvedProfile, timeout: Option<u64>) -> Result<Client> {
+    build_client_with_headers(profile, timeout, HeaderMap::new())
+}
+
+/// [`build_client`] plus caller-supplied request headers (`sn raw --header`),
+/// which the client applies after auth and `Content-Type` so they win. A
+/// separate entry point rather than a third parameter on `build_client`: only
+/// `raw` has headers to pass, and every other call site stays untouched.
+pub(crate) fn build_client_with_headers(
+    profile: &ResolvedProfile,
+    timeout: Option<u64>,
+    extra_headers: HeaderMap,
+) -> Result<Client> {
     let mut b = Client::builder()
+        .extra_headers(extra_headers)
         .proxy(profile.proxy.clone())
         .no_proxy(profile.no_proxy.clone())
         .insecure(profile.insecure)

@@ -1,69 +1,13 @@
 # Changelog
 
-## Unreleased
-
-### Breaking changes
-
-- **`sn introspect` emits the global flags once at the root, not on every command.** The
-  root gains `global_args`; each node's `args` now holds only that command's own
-  arguments. **A command's effective flags are its own `args` plus the root's
-  `global_args`** — non-global arguments do not propagate, so there is no ancestor chain
-  to walk. Anything generating per-command schemas needs to union the two.
-
-  clap propagates the 11 globals onto every node, and serializing them there was 1,480 of
-  1,852 argument entries — three quarters of the output. Together with the phantom-node
-  fix below, the tree drops from 481 KB to 129 KB.
-
-### Added
-
-- **`sn introspect` emits the constraints a schema generator needs.** Each `args[]` entry
-  gains `conflicts_with` (the arg ids that cannot be combined with it — `--data` alongside
-  `--field` is exit 1), `value_name` (the `SECS`/`URL`/`PATH` placeholder `--help` shows),
-  and `help_heading` (`Global options`, `Advanced options`, or `null` for a command's
-  working set). The root gains `version`, so a consumer caching generated schemas can
-  invalidate them on an upgrade.
-
-  One relation stays out of reach: clap keeps `requires` private, so `--wait-timeout`
-  requiring `--wait` is still only prose in that flag's `help`.
-
-- **`sn raw -H/--header 'Name: Value'`** — send request headers on the REST passthrough,
-  curl-style and repeatable. Endpoints that need one (`X-no-response-body`, Scripted REST
-  API custom headers, `Accept` negotiation, `X-UserToken`) were previously unreachable,
-  since `sn raw` could only vary method, path, query, and body.
-
-  Caller headers are applied last, after the client's own, so they win — `Content-Type`
-  included. Repeating a name sends it twice. A malformed header is a usage error (exit 1),
-  not a panic.
-
-  `Authorization` is refused: a profile is the whole unit of identity in this CLI, and a
-  credential passed in argv is visible to `ps` and to shell history. Configure identity
-  with `sn init` or `sn profile add`.
-
-  Both directions stay JSON regardless of the headers set. Responses are parsed as JSON,
-  so `Accept: text/xml` fetches XML and then fails to parse; `--data`/`--field` always
-  serialize JSON, so `Content-Type: application/xml` only mislabels a JSON body.
-
-### Fixed
-
-- **`sn introspect` honors the global output flags it accepts.** `--pretty`, `--compact`,
-  and `--output table` all parsed and were then discarded, because the command hardcoded
-  its own formatter instead of routing through the shared `write_response`. It also built
-  its tree from `Cli::command()` rather than `cli::command()`, so it described a command
-  tree whose usage lines differed from the one `--help` renders.
-
-- **`sn introspect` no longer emits clap's generated `help` subcommand.** It mirrored the
-  whole command tree as argument-less stubs, so 274 of 391 nodes described nothing
-  callable and every real command had a same-named twin: `sn help table list` sat beside
-  `sn table list` with an empty `args`, indistinguishable to a schema generator. Any
-  recursive walk — including the one `docs/agent-guide.md` prescribed — saw mostly
-  phantoms. The tree is now 121 nodes (481 KB → 429 KB).
-
-  `--help` and `--version` are dropped from `args[]` too. They exit before any handler
-  runs, so there is nothing for a generated tool to call. The filter keys on clap's
-  *action*, not the argument name, because `sn app install --version <VERSION>` is a real
-  value-taking option that a name-based filter would have deleted.
-
 ## 0.11.0 (2026-08-04)
+
+Two threads run through this release. The command surface gets the ergonomics a caller
+expects: the read verb is optional on `table` and `cmdb`, every argument is documented,
+`--help` is organized rather than exhaustive, and one write verb that never did what its
+name implied is gone. And `sn introspect` — the machine-readable face of that surface —
+becomes something you can generate schemas from: 73% smaller, free of the phantom nodes
+that made up most of it, and carrying the argument constraints a generator needs.
 
 ### Breaking changes
 
@@ -89,6 +33,18 @@
   **`--display-value all`** for both (each field becomes a `{value, display_value}`
   object).
 
+- **`sn introspect` emits the global flags once at the root, not on every command.** The
+  root gains `global_args`; each node's `args` now holds only that command's own
+  arguments. **A command's effective flags are its own `args` plus the root's
+  `global_args`** — non-global arguments do not propagate, so there is no ancestor chain
+  to walk. Anything generating per-command schemas needs to union the two.
+
+  clap propagates the 11 globals onto every node, and that repetition was most of what
+  the tree contained: of 0.10.0's 1,852 argument entries, 1,353 were those same 11 flags
+  repeated and another 124 were `--help`/`--version` stubs — 80% of the output, leaving
+  375 entries that described anything command-specific. Together with the phantom-node
+  fix below, the tree drops from 486 KB to 129 KB.
+
 ### Added
 
 - **The read verb may be omitted on `table` and `cmdb`.** `sn table incident <sys_id>` is
@@ -104,8 +60,35 @@
   than fetching from a table named `lst`. Groups with non-CRUD subcommands (`change`,
   `catalog`) are excluded, since there the first token is not reliably a noun.
 
+- **`sn raw -H/--header 'Name: Value'`** — send request headers on the REST passthrough,
+  curl-style and repeatable. Endpoints that need one (`X-no-response-body`, Scripted REST
+  API custom headers, `Accept` negotiation, `X-UserToken`) were previously unreachable,
+  since `sn raw` could only vary method, path, query, and body.
+
+  Caller headers are applied last, after the client's own, so they win — `Content-Type`
+  included. Repeating a name sends it twice. A malformed header is a usage error (exit 1),
+  not a panic.
+
+  `Authorization` is refused: a profile is the whole unit of identity in this CLI, and a
+  credential passed in argv is visible to `ps` and to shell history. Configure identity
+  with `sn init` or `sn profile add`.
+
+  Both directions stay JSON regardless of the headers set. Responses are parsed as JSON,
+  so `Accept: text/xml` fetches XML and then fails to parse; `--data`/`--field` always
+  serialize JSON, so `Content-Type: application/xml` only mislabels a JSON body.
+
 - **`-p` as a short alias for `--profile`.** Global, so `sn -p prod table list incident`
   and `sn table list incident -p prod` are equivalent.
+
+- **`sn introspect` emits the constraints a schema generator needs.** Each `args[]` entry
+  gains `conflicts_with` (the arg ids that cannot be combined with it — `--data` alongside
+  `--field` is exit 1), `value_name` (the `SECS`/`URL`/`PATH` placeholder `--help` shows),
+  and `help_heading` (`Global options`, `Advanced options`, or `null` for a command's
+  working set). The root gains `version`, so a consumer caching generated schemas can
+  invalidate them on an upgrade.
+
+  One relation stays out of reach: clap keeps `requires` private, so `--wait-timeout`
+  requiring `--wait` is still only prose in that flag's `help`.
 
 ### Fixed
 
@@ -114,13 +97,32 @@
   never is — so `sn change sc_cat_item abc` printed a usage line and nothing else. The
   error now appends `` `sn change` subcommands: list, get, create, … `` for every group.
 
+- **`sn introspect` no longer emits clap's generated `help` subcommand.** clap generates
+  one at every level that has subcommands, and each mirrors its whole subtree as
+  argument-less stubs — **274 of 0.10.0's 397 nodes were phantoms.** Most of the tree
+  described nothing callable, and every real command had a same-named twin: `sn help table
+  list` sat beside `sn table list` with an empty `args`, indistinguishable to a schema
+  generator. Any recursive walk — including the one `docs/agent-guide.md` prescribed —
+  saw mostly phantoms. The tree is now 121 nodes, all of them real.
+
+  `--help` and `--version` are dropped from `args[]` too. They exit before any handler
+  runs, so there is nothing for a generated tool to call. The filter keys on clap's
+  *action*, not the argument name, because `sn app install --version <VERSION>` is a real
+  value-taking option that a name-based filter would have deleted.
+
+- **`sn introspect` honors the global output flags it accepts.** `--pretty`, `--compact`,
+  and `--output table` all parsed and were then discarded, because the command hardcoded
+  its own formatter instead of routing through the shared `write_response`. It also built
+  its tree from `Cli::command()` rather than `cli::command()`, so it described a command
+  tree whose usage lines differed from the one `--help` renders.
+
 ### Changed
 
 - **`--help` is organized instead of exhaustive.** The 11 global flags used to be
   interleaved with each command's own — clap gives every argument container its own
   display-order counter and merges them, which zippered `--profile`/`--output`/`--pretty`
   through the middle of `--query`/`--fields`/`--setlimit`. They now sit in their own
-  `Global options` section below the command's flags, on all 331 subcommands. Raw
+  `Global options` section below the command's flags, on all 120 subcommands. Raw
   `sysparm_*` passthroughs most callers never touch (`--view`, `--query-category`,
   `--query-no-domain`, `--no-count`, `--suppress-pagination-header`,
   `--exclude-reference-link`) moved to `Advanced options`. `sn scores list` additionally
@@ -128,7 +130,8 @@
 
 - **Every flag and positional now has help text.** 123 arguments across 54 commands had
   none — `sn table get --help` listed `<TABLE>`, `<SYS_ID>` and five flags with blank
-  descriptions. All 1688 arguments are now documented.
+  descriptions. All 362 command-specific arguments and all 11 globals are documented now,
+  and `sn introspect` is the audit: a test walks the tree and fails on any null `help`.
 
 - **Usage lines put `[OPTIONS]` last**: `sn table get <TABLE> <SYS_ID> [OPTIONS]`, which
   is the order people type. Parsing is unchanged — flags are still accepted in any

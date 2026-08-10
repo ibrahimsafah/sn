@@ -146,7 +146,7 @@ sn watch channel '/uxbannerannouncements'                             # raw AMB 
 ⚠️ Gotchas:
 - **`changes` includes derived fields** — writing `urgency` also reports `priority` (ServiceNow recomputes it).
 - **Inserts list every populated field** (so an insert's `record` is the whole new row); **deletes carry `changes: []`**, so `--on-change` never matches a delete. A delete carries no `record` at all (`record: null` under `--hydrate`).
-- **`sn watch count` emits a delta, not a total**: `{"count":"+1"}` / `{"count":"-1"}` (strings). Seed with `sn aggregate <TABLE> --count` and accumulate.
+- **`sn watch count` emits a delta, not a total**: `{"count":"+1"}` / `{"count":"-1"}` (strings). Seed with `sn aggregate <TABLE> --count --query <ENCODED_QUERY>` (same query as the watch) and accumulate.
 - Ctrl-C exits 0. Exit 4 if the profile can't authenticate, 3 if the socket can't be established.
 - Works with basic **and** OAuth profiles. **No proxy support** (refused with exit 1, not silently bypassed); `--insecure`/`--ca-cert` do work.
 

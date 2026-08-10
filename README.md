@@ -6,31 +6,41 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Latest release](https://img.shields.io/github/v/release/tehubersheezy/servicenow-cli?display_name=tag&sort=semver)](https://github.com/tehubersheezy/servicenow-cli/releases/latest)
 
-A fast, single-binary CLI for ServiceNow, built for LLM agents and human operators alike.
+**Your ServiceNow instance in the terminal — a single fast binary for pro-code development, testing, and debugging, built to be driven by an LLM assistant as well as by you.**
 
-It wraps ServiceNow's REST APIs — Table, Change Management, Attachment, CMDB, Import Set, Service Catalog, Identification & Reconciliation, CICD, Aggregate, Performance Analytics, and schema discovery — behind one predictable interface: stable JSON on stdout, structured errors on stderr, and deterministic exit codes.
+ServiceNow development happens against a live instance: the record your script just wrote, the business rule that just fired (or didn't), the update set that has to move, the ATF suite that proves the change. `sn` puts that whole loop in the terminal. It wraps the platform's REST surface — Table, Change Management, Attachment, CMDB, Import Set, Service Catalog, Identification & Reconciliation, CICD (apps, update sets, ATF), Aggregate, Performance Analytics, schema discovery, and a live record-watch stream — so you develop, test, and debug where your code is, instead of clicking through forms.
 
 ```bash
-sn init                                      # connect to an instance
-sn table list incident --setlimit 5          # read records as JSON
-sn table create incident --field short_description="Disk full on prod-db-01"
-sn ping                                       # auth + latency health check
+sn init                                            # connect to an instance
+sn schema columns incident --writable              # learn the table before writing to it
+sn table create incident -F short_description="Disk full on prod-db-01"
+sn watch table incident --query "active=true"      # watch your business rules fire, live
+sn atf run --suite-name "Regression Suite" --wait  # prove the change
 ```
 
-> ### 🆕 What's new in 0.10.0 — `sn watch`
+Every command honors one contract: stable JSON on stdout, structured errors on stderr, deterministic exit codes, and no prompt unless you opted in. That contract is what makes it safe to hand to a coding agent — Claude (or any LLM) can discover schema before writing, verify a change actually landed, stream record changes while a script runs, and read failures as data instead of prose. `sn introspect` emits the full command tree as JSON for generating tool schemas, and the repo ships as a [Claude Code plugin](#agent-integration) with the CLI pre-approved.
+
+> ### 🆕 What's new in 0.11.0
 >
-> **[`sn watch`](#watching-records-live)** streams record changes over ServiceNow's AMB
-> websocket as they happen, as JSONL on stdout, one event per line. Each event carries the
-> fields that changed and their new values.
+> The read verb is now optional on `table` and `cmdb`, `sn raw` takes request headers,
+> and `--profile` gets a short `-p`:
 >
 > ```bash
-> sn watch table incident --query "priority=1^active=true" --max-events 5
-> sn watch table incident --sys-id <SYS_ID> --on-change state --duration 60
+> sn table incident <SYS_ID>            # = sn table get incident <SYS_ID>
+> sn cmdb cmdb_ci_server                # = sn cmdb list cmdb_ci_server
+> sn raw GET /api/now/table/incident -H 'X-no-response-body: true'
+> sn -p prod ping
 > ```
 >
-> Filter with `--operation` and `--on-change`; bound the stream with `--max-events`,
-> `--duration` and `--idle-timeout`. Add `--hydrate` to also fetch the fields that
-> *didn't* change.
+> Only reads are ever inferred — never a write — and a typo is still a typo, not a table.
+>
+> Three **breaking changes**: `replace` is gone (use `update` — measured on a live
+> instance, ServiceNow treats PUT as a partial update too, so the verb never did what it
+> claimed); [`--display-value` defaults to `true`](#reading-records) (readable labels —
+> pass `false` when a value must round-trip into a query); and [`sn introspect`](#agent-integration)
+> now emits the global flags once at the root — with phantom `help` nodes gone, the tree
+> drops 73% to 121 nodes, all real, and each arg carries `conflicts_with`/`value_name`
+> for schema generators.
 >
 > Full [changelog](CHANGELOG.md).
 
@@ -293,7 +303,7 @@ Worth knowing:
 
 - **`changes` includes derived fields.** Writing `urgency` also reports `priority`, because ServiceNow recomputes it.
 - **Inserts list every populated field** in `changes`, so an insert's `record` is the whole new row. **Deletes carry `changes: []`**, so `--on-change` never matches a delete — and no `record`, since there is nothing left to report (under `--hydrate` a delete emits `record: null` instead of attempting a doomed fetch).
-- **`sn watch count` reports a delta, not a total** (`{"count": "+1"}`). Seed from `sn aggregate <TABLE> --count` and accumulate.
+- **`sn watch count` reports a delta, not a total** (`{"count": "+1"}`). Seed from `sn aggregate <TABLE> --count --query <ENCODED_QUERY>` (same query as the watch) and accumulate.
 - Ctrl-C exits 0. Works with both basic and OAuth/SSO profiles.
 - `--insecure` and `--ca-cert` are honored. **Proxies are not supported**: a profile with a proxy configured exits 1 rather than connecting around it.
 

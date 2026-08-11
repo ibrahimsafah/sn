@@ -12,6 +12,7 @@ pub mod identify;
 pub mod import;
 pub mod init;
 pub mod introspect;
+pub mod journal;
 pub mod open_record;
 pub mod ping;
 pub mod profile;
@@ -53,6 +54,7 @@ pub use graphql::GraphqlArgs;
 pub use identify::{IdentifyArgs, IdentifyEnhancedArgs, IdentifySub};
 pub use import::{ImportBulkArgs, ImportCreateArgs, ImportGetArgs, ImportSub};
 pub use init::InitArgs;
+pub use journal::{JournalArgs, JournalSource};
 pub use open_record::OpenArgs;
 pub use profile::{ProfileAddArgs, ProfileSub};
 pub use progress::ProgressArgs;
@@ -343,6 +345,8 @@ pub enum Command {
         #[command(subcommand)]
         sub: TableSub,
     },
+    /// Comments and work notes for one record, parsed into entries (`sn journal <TABLE> <SYS_ID>`).
+    Journal(JournalArgs),
     /// Watch records change in real time (AMB websocket). Streams JSONL.
     Watch {
         #[command(subcommand)]

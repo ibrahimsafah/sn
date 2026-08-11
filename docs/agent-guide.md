@@ -385,6 +385,34 @@ sn table list incident --query "active=true^priority=1^ORpriority=2^ORDERBYDESCs
 sn table list incident --query "assigned_to=6816f79c...^ORassigned_toISEMPTY"
 ```
 
+## Comments & work notes (`journal`)
+
+```bash
+sn journal incident <sys_id>                  # entries newest first
+sn journal incident <sys_id> --comments       # or --work-notes (mutually exclusive)
+sn journal incident <sys_id> --limit 5        # newest 5 only
+sn journal incident <sys_id> --raw            # the unparsed rendered stream (JSON string)
+sn journal incident <sys_id> --source table   # exact sys_journal_field rows
+```
+
+Output is an array of `{created_on, author, element, label, text}`, newest
+first. `element` is the journal column (`comments` / `work_notes`); `label` is
+the rendered field label the entry carried ("Comments", "Work notes",
+"Additional comments" — instance-dependent).
+
+Why two sources: journal entries live one-per-row in `sys_journal_field`, but
+that table is ACL-locked for non-admin roles — the row *count* survives the
+ACLs, the rows do not. The default `--source record` therefore reads the
+record's rendered journal stream (readable by any role that can read the
+record) and parses it; its timestamps are in the calling user's timezone and
+date format. `--source table` returns the exact rows — UTC timestamps,
+usernames instead of display names, no `label` — when the profile's ACLs allow;
+if rows exist but all were filtered, the command exits 2 naming the cause and
+pointing back at `--source record`, rather than emitting a misleading `[]`.
+
+There is no `journal add`: writing an entry is a plain field write —
+`sn table update incident <sys_id> --field work_notes="checked the router"`.
+
 ## Writing records (`create`, `update`, `delete`)
 
 **Body input** — two mutually exclusive ways (mixing them is exit 1):
@@ -910,6 +938,7 @@ sn table create  TABLE (--data JSON|@FILE|@- | --field K=V ...) [--fields CSV] [
 sn table update  TABLE SYS_ID (--data ...|--field K=V ...) [same write flags]     # PATCH — the only write verb
 sn table delete  TABLE SYS_ID [--yes] [--query-no-domain]
 sn table TABLE [SYS_ID]                                                           # verb optional: = list / = get
+sn journal TABLE SYS_ID [--comments|--work-notes] [--limit N] [--raw] [--source record|table]
 
 sn change list [--type normal|emergency|standard] [shared list flags]
 sn change get|update|delete SYS_ID [--type ...] [--yes]     sn change create [--type ...] [--template ID] (--data|--field)

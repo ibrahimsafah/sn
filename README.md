@@ -53,6 +53,7 @@ Every command honors one contract: stable JSON on stdout, structured errors on s
   - [OAuth / SSO](#oauth--sso)
 - [Usage](#usage)
   - [Reading records](#reading-records)
+  - [Comments & work notes](#comments--work-notes)
   - [Writing records](#writing-records)
   - [Pagination](#pagination)
   - [Watching records (live)](#watching-records-live)
@@ -231,6 +232,30 @@ stays an error: `sn table lst incident` still tells you it meant `list`.
 Note that `--display-value true` (the default) also renders dates in the calling user's
 timezone and locale format, and a display-formatted date cannot be fed back into an
 encoded query. Use `--display-value false` when a value has to round-trip.
+
+### Comments & work notes
+
+Journal entries live in `sys_journal_field`, one row per entry — but that table is
+ACL-locked for non-admin roles (the row *count* comes back, the rows don't). What any
+role that can read the record *can* read is the record's rendered journal stream.
+`sn journal` fetches it over GraphQL and parses it back into structured entries,
+newest first:
+
+```bash
+sn journal incident <sys_id>                    # all entries: [{created_on, author, element, label, text}]
+sn journal incident <sys_id> --comments         # customer-visible comments only
+sn journal incident <sys_id> --work-notes       # work notes only
+sn journal incident <sys_id> --limit 5          # newest 5
+sn journal incident <sys_id> --raw              # the unparsed rendered stream, as a JSON string
+sn journal incident <sys_id> --source table     # exact sys_journal_field rows (needs table ACL access)
+```
+
+The default `--source record` works for any role that can read the record; its
+timestamps are rendered in the calling user's timezone and date format. `--source table`
+returns exact rows with UTC timestamps and usernames instead — and when rows exist but
+ACLs filter them all, the error says so and points back at `--source record`. Adding an
+entry needs no dedicated command: `sn table update incident <sys_id> --field
+work_notes="..."` writes one.
 
 ### Writing records
 

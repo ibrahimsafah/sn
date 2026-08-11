@@ -1,6 +1,6 @@
 ---
 name: sn
-description: Use when the user asks about ServiceNow data, incidents, change requests, problems, CIs, attachments, CMDB, service catalog, import sets, or any SNOW/SN operations. Also use when user says "sn", "servicenow", or references a ServiceNow instance, CICD operations (app install/publish/rollback, update sets, ATF tests), aggregate statistics, Performance Analytics scorecards, CI reconciliation, GraphQL queries, or watching records change in real time (record watchers / live updates / AMB websocket).
+description: Use when the user asks about ServiceNow data, incidents, change requests, problems, CIs, attachments, CMDB, service catalog, import sets, or any SNOW/SN operations. Also use when user says "sn", "servicenow", or references a ServiceNow instance, comments/work notes on a record, CICD operations (app install/publish/rollback, update sets, ATF tests), aggregate statistics, Performance Analytics scorecards, CI reconciliation, GraphQL queries, or watching records change in real time (record watchers / live updates / AMB websocket).
 allowed-tools: Bash(sn *)
 ---
 
@@ -92,6 +92,18 @@ sn table delete incident <sys_id> --yes                # --yes required on non-T
 ```
 
 `get` takes no `--query`; filter with `list --query "..." --setlimit 1`.
+
+## Journal (comments & work notes)
+
+```bash
+sn journal incident <sys_id>                  # entries newest first: [{created_on, author, element, label, text}]
+sn journal incident <sys_id> --comments       # or --work-notes (mutually exclusive)
+sn journal incident <sys_id> --limit 5        # newest 5
+sn journal incident <sys_id> --raw            # unparsed rendered stream as a JSON string
+sn journal incident <sys_id> --source table   # exact sys_journal_field rows (UTC, usernames) — needs table ACL access
+```
+
+Default `--source record` parses the record's rendered journal stream (works for any role that can read the record; timestamps in the caller's timezone/format). `sys_journal_field` itself is ACL-locked for non-admin roles — with `--source table` the count leaks but rows come back empty, and the command errors naming the cause instead of emitting `[]`. To *add* an entry: `sn table update incident <sys_id> --field work_notes="..."`.
 
 ## Encoded query (--query)
 

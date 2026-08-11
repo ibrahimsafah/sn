@@ -94,9 +94,11 @@ via GraphQL, parse the rendered stream into JSON entries
 - `--comments` / `--work-notes` — filter by type (also narrows the fetched
   column, which matters: `comments` and `work_notes` are separate columns).
 - `--raw` — the unparsed stream string.
-- When the profile can actually read `sys_journal_field` (admin), optionally
-  query it directly instead for true per-entry rows with sys_ids and UTC
-  timestamps (`--source table|record`, default auto).
+- `--source record|table` (default `record`): `table` queries
+  `sys_journal_field` directly for true per-entry rows with UTC timestamps and
+  usernames — for profiles whose ACLs allow it. No `auto` mode: predictable
+  request counts beat cleverness for an agent-facing CLI, and the ACL-filtered
+  case errors with a pointer to `--source record`.
 
 Writes need no new surface — `sn table update <t> <id> --field work_notes=…`
 already lands a journal entry via REST.

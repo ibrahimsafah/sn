@@ -87,6 +87,7 @@ fn run(cli: Cli) -> Result<()> {
             TableSub::Update(args) => sn::cli::table::update(&global, args),
             TableSub::Delete(args) => sn::cli::table::delete(&global, args),
         },
+        Command::Journal(args) => sn::cli::journal::run(&global, args),
         Command::Watch { sub } => sn::cli::watch::run(&global, sub),
         Command::Schema { sub } => match sub {
             SchemaSub::Tables(args) => sn::cli::schema::tables(&global, args),

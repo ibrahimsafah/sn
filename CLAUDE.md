@@ -64,6 +64,7 @@ src/
     open_record.rs  → sn open <table> <sys_id> (opens the form in the browser)
     raw.rs          → sn raw <method> <path> (REST passthrough for unmodeled endpoints; --header, --query, --data/--field)
     graphql.rs      → sn graphql <query> (GraphQL passthrough: POST /api/now/graphql; in-band errors → exit 2 with the array in sn_error)
+    journal.rs      → sn journal <table> <sys_id> (comments/work notes parsed into entries; record-stream source by default, sys_journal_field rows via --source table)
     completion.rs   → sn completion <shell> (clap_complete)
 ```
 

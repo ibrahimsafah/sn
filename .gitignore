@@ -7,3 +7,4 @@ Cargo.lock.old
 
 # Playwright MCP session debris
 .playwright-mcp/
+.playwright-cli/

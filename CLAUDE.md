@@ -146,7 +146,7 @@ Transport gaps: the socket is opened directly rather than through reqwest, so it
 
 Guards live in `tests/introspect.rs` (no node named `help`, unique command paths, globals not duplicated, builtins gone but `app install --version` intact). Note that `tests/cli_surface.rs::every_argument_has_help_text` walks this tree: it chains the root's `global_args`, because checking `args` alone would silently stop covering 11 flags rather than fail.
 
-Four places document this schema by hand and must move together: `.claude/skills/sn.md`, `skills/sn/SKILL.md`, `docs/agent-guide.md`, and `README.md`.
+Four places document this schema by hand and must move together: `.claude/skills/sn.md`, `skills/sn/SKILL.md`, `docs/agent-guide.md`, and `docs/agent-integration.md` (the README links there but carries no schema detail itself).
 
 ### Profile resolution precedence
 

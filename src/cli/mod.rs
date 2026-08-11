@@ -7,6 +7,7 @@ pub mod catalog;
 pub mod change;
 pub mod cmdb;
 pub mod completion;
+pub mod graphql;
 pub mod identify;
 pub mod import;
 pub mod init;
@@ -48,6 +49,7 @@ pub use cmdb::{
     CmdbRelationDeleteArgs, CmdbRelationSub, CmdbSub, CmdbUpdateArgs,
 };
 pub use completion::{CompletionArgs, Shell as CompletionShell};
+pub use graphql::GraphqlArgs;
 pub use identify::{IdentifyArgs, IdentifyEnhancedArgs, IdentifySub};
 pub use import::{ImportBulkArgs, ImportCreateArgs, ImportGetArgs, ImportSub};
 pub use init::InitArgs;
@@ -419,6 +421,8 @@ pub enum Command {
     Open(OpenArgs),
     /// Generic REST passthrough for unmodeled endpoints (`sn raw <METHOD> <PATH>`).
     Raw(RawArgs),
+    /// Run a GraphQL query against POST /api/now/graphql (`sn graphql <QUERY>`).
+    Graphql(GraphqlArgs),
     /// Generate a shell completion script (`sn completion <SHELL>`).
     Completion(CompletionArgs),
 }

@@ -69,6 +69,7 @@ Every command honors one contract: stable JSON on stdout, structured errors on s
   - [Inspect and connect](#inspect-and-connect)
   - [Open a record in the web UI](#open-a-record-in-the-web-ui)
   - [Raw REST passthrough](#raw-rest-passthrough)
+  - [GraphQL queries](#graphql-queries)
   - [Human-readable table output](#human-readable-table-output)
   - [Shell completions](#shell-completions)
   - [Agent integration](#agent-integration)
@@ -524,6 +525,19 @@ sn raw PATCH /api/now/table/incident/abc123 --field state=2
 sn raw DELETE /api/now/table/incident/abc123
 sn raw GET /api/now/table/incident -H 'X-no-response-body: true' -H 'X-Trace: 1'
 ```
+
+### GraphQL queries
+
+`POST /api/now/graphql` serves ServiceNow's whole GraphQL surface, including the generated `GlideRecord_Query` / `GlideRecord_Mutation` / `GlideAggregateRecord_Query` namespaces — a query field and CRUD mutations for every table, with per-field display values, inline choice lists, ACL-evaluated metadata, and server-side dot-walking through reference fields. `sn graphql` runs a document against it under the profile's auth and the standard output/error contract:
+
+```bash
+sn graphql 'query { GlideRecord_Query { incident(queryConditions: "active=true", pagination: { limit: 5 }) { _rowCount _results { number { value } state { displayValue } } } } }'
+sn graphql @query.graphql --var id=a1b2c3d4e5f6           # document from a file, one string variable
+sn graphql @- --variables '{"limit": 5}' < query.graphql  # document from stdin, typed variables
+sn graphql @doc.graphql --operation GetIncident           # pick one operation from a multi-op document
+```
+
+On success stdout gets `data` unwrapped — the GraphQL analogue of stripping `{"result": ...}` (`--output raw` keeps the whole response). GraphQL reports failure **in-band**: HTTP 200 with an `errors` array, sometimes alongside partial `data`. A response with errors exits 2 with the first error's message in the stderr envelope and the full array under `sn_error`; any partial `data` still reaches stdout first. `--var k=v` sets a string variable (repeatable; only the first `=` splits, so encoded queries pass through). `--variables` takes a whole JSON object for non-string variables; `--var` entries overlay it.
 
 ### Human-readable table output
 

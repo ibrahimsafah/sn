@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`sn graphql <QUERY>`** — run a GraphQL document against `POST /api/now/graphql`,
+  which serves the instance's whole GraphQL surface: the scripted namespaces plus the
+  generated `GlideRecord_Query` / `GlideRecord_Mutation` / `GlideAggregateRecord_Query`
+  namespaces (a query field and CRUD mutations per table, with per-field display values,
+  inline choice lists, ACL-evaluated metadata, and dot-walking through references). The
+  document comes inline, from `@file`, or `@-` (stdin); `--var k=v` sets a string
+  variable (repeatable, first `=` splits), `--variables '{...}'` supplies a whole JSON
+  object for typed values (`--var` wins on conflict), and `--operation` selects from a
+  multi-operation document.
+
+  The point over `sn raw`: GraphQL reports failure **in-band** — HTTP 200 with an
+  `errors` array, sometimes alongside partial `data` — which would read as success
+  under the exit-code contract. `sn graphql` maps a response with errors to exit 2,
+  putting the first message in the stderr envelope and the full array under `sn_error`,
+  while any partial `data` still reaches stdout first. On success, stdout gets `data`
+  unwrapped, the GraphQL analogue of stripping `{"result": ...}`; `--output raw` keeps
+  the whole response body.
+
 ## 0.11.0 (2026-08-04)
 
 Two threads run through this release. The command surface gets the ergonomics a caller

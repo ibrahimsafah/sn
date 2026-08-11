@@ -777,12 +777,30 @@ sn open incident a1b2c3 [--print-url]    # open the record's form in a browser; 
 sn raw GET /api/now/table/incident --query sysparm_limit=5      # REST passthrough for unmodeled endpoints
 sn raw POST /api/now/table/incident --data '{"short_description":"via raw"}'
 sn raw GET /api/now/table/incident -H 'X-no-response-body: true'   # repeatable request headers
+sn graphql 'query { GlideRecord_Query { incident(pagination: {limit: 5}) { _rowCount _results { number { value } } } } }'
+sn graphql @query.graphql --var id=a1b2c3 --variables '{"limit": 5}'   # document from file; string + typed variables
 sn completion zsh                        # shell completion script (bash|zsh|fish|powershell|elvish) to stdout
 sn introspect                            # full command tree as JSON — auto-generate MCP / function-call schemas
 ```
 
 `sn raw <METHOD> <PATH>` applies the active profile's auth/proxy/TLS and the
 standard output/error contract; use it for endpoints `sn` doesn't model.
+
+`sn graphql <QUERY>` runs a GraphQL document against `POST /api/now/graphql` —
+the whole surface, including the generated `GlideRecord_Query` /
+`GlideRecord_Mutation` / `GlideAggregateRecord_Query` namespaces (a query field
+and CRUD mutations for every table; per-field display values, `_choices` on
+choice fields, `_table_metadata` ACL verdicts, `_reference` dot-walking,
+`_rowCount` totals alongside a page). The document comes inline, from `@file`,
+or `@-` (stdin). On success stdout gets `data` unwrapped (`--output raw` keeps
+the envelope). GraphQL reports failure **in-band** — HTTP 200 with an `errors`
+array, sometimes next to partial `data` — so a response with errors exits 2
+with the full array under `sn_error`, and partial `data` still reaches stdout
+first. `--var k=v` sets a string variable (repeatable; only the first `=`
+splits, so encoded queries pass through). `--variables '{...}'` supplies a JSON
+object for non-string variables; `--var` entries overlay it. Prefer variables
+over splicing values into the document — a sys_id in `--var` can't break query
+syntax.
 `sn introspect` emits the whole command tree as **one recursive object** —
 `{name, about, args[], subcommands[]}`, with `subcommands` nesting the same shape
 all the way down. There is **no** top-level `commands` array (`jq '.commands[]'`
@@ -877,6 +895,7 @@ sn profile add NAME --instance X --username Y --password-stdin [--force|--no-ver
 sn profile list|show NAME|use NAME|remove NAME    sn auth login|status|refresh|logout
 sn user me     sn open TABLE SYS_ID [--print-url]     sn completion SHELL
 sn raw METHOD PATH [-q k=v ...] [--data ...|--field k=v ...]
+sn graphql QUERY|@FILE|@- [--var K=V ...] [--variables JSON|@FILE|@-] [--operation NAME]
 sn introspect  sn progress PROGRESS_ID
 
 sn schema tables [--filter SUBSTR]

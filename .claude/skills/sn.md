@@ -1,6 +1,6 @@
 ---
 name: sn
-description: Use when the user asks about ServiceNow data, incidents, change requests, problems, CIs, attachments, CMDB, service catalog, import sets, or any SNOW/SN operations. Also use when user says "sn", "servicenow", or references a ServiceNow instance, CICD operations (app install/publish/rollback, update sets, ATF tests), aggregate statistics, Performance Analytics scorecards, CI reconciliation, or watching records change in real time (record watchers / live updates / AMB websocket).
+description: Use when the user asks about ServiceNow data, incidents, change requests, problems, CIs, attachments, CMDB, service catalog, import sets, or any SNOW/SN operations. Also use when user says "sn", "servicenow", or references a ServiceNow instance, CICD operations (app install/publish/rollback, update sets, ATF tests), aggregate statistics, Performance Analytics scorecards, CI reconciliation, GraphQL queries, or watching records change in real time (record watchers / live updates / AMB websocket).
 ---
 
 # sn — ServiceNow CLI
@@ -290,9 +290,13 @@ sn raw POST /api/now/table/incident --data '{"short_description":"x"}'
 sn raw PATCH /api/now/table/incident/<sys_id> --field state=2
 sn raw DELETE /api/now/table/incident/<sys_id>
 sn raw GET /api/now/table/incident -H 'X-no-response-body: true'   # repeatable; Authorization is rejected
+sn graphql 'query { GlideRecord_Query { incident(pagination: {limit: 5}) { _rowCount _results { number { value } } } } }'
+sn graphql @query.graphql --var id=<sys_id> --variables '{"limit": 5}' --operation Get
 sn completion bash|zsh|fish|powershell|elvish   # zsh: > ~/.zsh/completions/_sn (dir on fpath + compinit)
 sn introspect                              # full command tree as JSON (for MCP/tool generation)
 ```
+
+`graphql` runs a document against `POST /api/now/graphql` — the whole GraphQL surface, including the generated `GlideRecord_Query`/`GlideRecord_Mutation`/`GlideAggregateRecord_Query` per-table namespaces (per-field display values, `_choices` on choice fields, `_table_metadata` ACL verdicts, `_reference` dot-walking, `_rowCount` totals). Success unwraps `data` (`--output raw` keeps the envelope). GraphQL fails **in-band** — HTTP 200 with an `errors` array — so errors exit 2 with the array under `sn_error`, and partial `data` still reaches stdout. `--var k=v` sets a string variable (first `=` splits); `--variables '{...}'` is a JSON object for typed values; `--var` wins on conflict.
 
 `raw` emits the response exactly as ServiceNow returns it (no unwrapping); method is case-insensitive. `-H/--header 'Name: Value'` is repeatable and beats the header the client would otherwise send (`Content-Type` included); `Authorization` is rejected — identity comes from the profile. Both directions stay JSON: a non-JSON response fails to parse. `introspect` args carry `takes_value`, `value_name`, `positional`, `repeatable`, `default_values`, `aliases`, `possible_values`, `conflicts_with`, and `help_heading`; flags report `takes_value: false` — pass them bare (`--all`, not `--all true`). `conflicts_with` names the flags that cannot be combined (`--data` with `--field` is exit 1). The root carries `version` and `global_args`: **a command's effective flags are its own `args` plus the root's `global_args`** — the 11 propagated globals are emitted once, not repeated on all 121 nodes. Nothing named `help` appears in the tree, and `--help`/`--version` are omitted from `args[]`.
 

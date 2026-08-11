@@ -187,6 +187,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Ping => sn::cli::ping::run(&global),
         Command::Open(args) => sn::cli::open_record::run(&global, args),
         Command::Raw(args) => sn::cli::raw::run(&global, args),
+        Command::Graphql(args) => sn::cli::graphql::run(&global, args),
         Command::Completion(args) => sn::cli::completion::run(args),
     }
 }

@@ -1,6 +1,34 @@
 # Changelog
 
-## Unreleased
+## 0.12.0 (2026-08-12)
+
+Two things happen at once here. Four new commands widen what is reachable without a browser
+or a hand-written REST call: `sn api` for the instance's own API catalogue, `sn graphql` for
+its whole GraphQL surface, and `sn journal` and `sn variables` for two record surfaces the
+Table API cannot reach cleanly under a non-admin role. Underneath them is the larger half of
+the work — `sn cmdb`'s writes, which could not work at all; config writes that lost each
+other under parallel invocations, and a read that could erase them outright; an identity
+check that would confidently name the wrong user; and the output-contract edges where a flag
+parsed and was then ignored.
+
+Three changes can break a script. Two of them lead the Changed section below — `--all`
+combined with `--output raw` or `--output table` is now exit 1 rather than silently ignored,
+and six destructive commands refuse to run without `--yes` when stdin is not a terminal — and
+the third sits under Fixed: `sn ping` reports the identity the instance asserts, in
+preference to the configured one.
+
+### Breaking changes
+
+- **`--all` no longer combines with `--output raw` or `--output table`** — both are exit 1
+  rather than silently ignored. For table, add `--array` to buffer; for raw there is no
+  envelope left to keep, so drop one flag or the other. Detail under Changed.
+- **Six destructive commands require `--yes` when stdin is not a terminal**: `profile
+  remove`, `catalog cart-empty`, `catalog cart-remove`, `change conflict remove`, `updateset
+  back-out`, `app rollback`. A script running any of them must add `--yes`. Detail under
+  Changed.
+- **`sn ping`'s `username` is the instance's answer, not the configured value.** A wrapper
+  asserting it equals the profile's `username` field now fails when the two disagree — which
+  is precisely the condition the change exists to surface. Detail under Fixed.
 
 ### Added
 
@@ -61,7 +89,8 @@
 
 - **`sn journal <TABLE> <SYS_ID>`** — comments and work notes for one record, parsed
   into structured entries (`[{created_on, author, element, label, text}]`, newest
-  first). Journal entries live in `sys_journal_field`, but that table is ACL-locked
+  first; `--source table` rows carry no `label`, since a `sys_journal_field` row has no
+  rendered one). Journal entries live in `sys_journal_field`, but that table is ACL-locked
   for non-admin roles — measured live, an `itil` query returns the row count and zero
   rows. So the default `--source record` reads the record's *rendered* journal stream
   over GraphQL (readable by any role that can read the record) and parses it back into
@@ -94,15 +123,6 @@
   the whole response body.
 
 ### Changed
-
-- **`--setLimit` is accepted wherever `--setlimit` is, and `--help` now names the
-  alternatives.** Long flags match case-sensitively, so the camelCase spelling was rejected —
-  and the flag is named after GlideRecord's `setLimit()`, so it is the spelling a ServiceNow
-  developer already has in muscle memory. `--limit`, `--sysparm-limit` and `--page-size` were
-  *already* accepted at every record-cap site but invisible, because clap prints only an
-  argument's canonical name; each flag's help text now lists them. A genuine typo still gets
-  clap's suggestion, and `sn introspect` already published `aliases`, so nothing about the
-  machine-readable contract changes.
 
 - **`--all` can no longer be combined with `--output raw` or `--output table`.** Both were
   accepted and then ignored — `sn table list incident --all --output table` streamed JSONL
@@ -139,6 +159,16 @@
   instance without undoing what the newer version wrote. Neither has an undo of its own, and
   the cost of being wrong is asymmetric — `--yes` is one token in a script, while an
   unintended back-out is a recovery project.
+
+- **`--setLimit` is accepted wherever `--setlimit` is, and `--help` now says that `--limit`
+  works too.** Long flags match case-sensitively, so the camelCase spelling was rejected —
+  and the flag is named after GlideRecord's `setLimit()`, so it is the spelling a ServiceNow
+  developer already has in muscle memory. `--limit` and `--sysparm-limit` were *already*
+  accepted at every record-cap site but invisible, because clap prints only an argument's
+  canonical name; each flag's help text now names `--limit` and `--setLimit` (`--page-size`
+  additionally works on `sn table list`). A genuine typo still gets clap's suggestion, and
+  `sn introspect` already published `aliases`, so nothing about the machine-readable contract
+  changes.
 
 - **Batch output is buffered; streamed output is flushed per record.** stdout is a
   `LineWriter` with a ~1 KiB buffer, and compact JSON has no newline to flush on, so a large
@@ -372,6 +402,34 @@
   on Unix the containing directory is fsynced after the rename, so the guarantee covers the
   directory entry and not only the contents.
 
+  On Windows the replacement is `MoveFileExW`, which has to open the destination for delete —
+  so anything else holding that name makes it fail: a reader (`sn` takes no lock to *read*), a
+  virus scanner, an indexer, or a destination still delete-pending from the previous
+  replacement. Twelve concurrent `sn profile add`s against one config directory on
+  `windows-latest` produced exactly that, one of them dying with `replace config.toml: Access
+  is denied. (os error 5)`. The rename now retries while the failure looks transient
+  (`ERROR_SHARING_VIOLATION`, `ERROR_LOCK_VIOLATION`, and `ERROR_ACCESS_DENIED` — which is
+  what delete-pending reports and is indistinguishable from a real permission failure, hence a
+  **bounded** 2s budget that then surfaces the error rather than a loop that hides it). The
+  budget stays well under the 10s lock timeout, since a writer retrying here holds the
+  directory lock and everyone behind it is spending their own budget. On Unix the predicate is
+  a constant `false` — `rename(2)` cannot fail because someone has the destination open, so an
+  `EACCES` there is permanent and is reported at once — leaving exactly one attempt.
+
+- **A config file that cannot be read is an error, not an empty config.** `load_config_from`
+  and `load_credentials_from` tested for absence with `path.exists()`, which answers `false`
+  for *any* failure and not only for "not there" — so a file the process could not read (a bad
+  mode, a directory it lacks search permission on, or on Windows a name momentarily
+  delete-pending under a concurrent replacement) loaded as an empty config, and the
+  read-modify-write wrapped around it then wrote that emptiness back. Every profile and every
+  stored credential, deleted, with exit 0 and success JSON on stdout. The absence test is now
+  the read's own `NotFound` and nothing else; anything else fails loudly with the underlying
+  error. Present since 0.1.0, and turned up while investigating the Windows failure above —
+  which is what makes it reachable with no permission mistake anywhere.
+
+  Readers deliberately take no lock, so a reader stands in the same Windows sharing window a
+  writer does; the read carries the same bounded retry before it gives up.
+
 ### Security
 
 - **`credentials.toml` is created 0600 by `open(2)` itself, closing a world-readable
@@ -397,6 +455,17 @@
 
 - **`tempfile` moves from dev-dependencies to dependencies**, since the atomic config write
   uses it at runtime.
+
+- **`webbrowser` 1.2.1 → 1.2.4**, clearing **RUSTSEC-2026-0257** ("Unix `BROWSER` handling
+  allows browser argument injection"). Affected versions substituted the caller's URL into a
+  `%s` in the `BROWSER` template and only *then* tokenized the result on whitespace, so a
+  non-HTTP(S) URL whose parsed form keeps its spaces could smuggle extra browser arguments —
+  reproduced against Chromium with `--remote-debugging-port` and `--proxy-server`. `sn` calls
+  `webbrowser::open` in two places, `sn open` and the `sn auth login` browser step, and both
+  hand it an `https://` URL this CLI built from the profile's own instance, so neither call
+  site could reach it. Taken anyway: 1.2.2 is the patched floor, `cargo audit` gates every
+  dependency change and runs daily besides, and a release should not ship a known advisory on
+  the strength of an argument about reachability.
 
 ## 0.11.0 (2026-08-04)
 

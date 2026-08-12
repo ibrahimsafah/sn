@@ -63,9 +63,11 @@ of them with examples.
 | [`sn cmdb`](docs/usage.md#cmdb) | Configuration Items: CRUD, class schema, relationships |
 | [`sn import`](docs/usage.md#import-sets) | Load staging tables for transform-based imports |
 | [`sn catalog`](docs/usage.md#service-catalog) | Browse the Service Catalog and place orders |
+| [`sn variables`](docs/agent-guide.md#catalog-variables-variables) | Catalog variables on a record: read them, write them with verification |
 | [`sn identify`](docs/usage.md#identification--reconciliation) | CI identification and reconciliation |
 | [`sn app` / `sn updateset` / `sn atf`](docs/usage.md#cicd-operations) | CICD: install/publish apps, move update sets, run ATF suites |
 | [`sn scores`](docs/usage.md#performance-analytics-scorecards) | Performance Analytics scorecards |
+| [`sn api`](docs/usage.md#api-discovery) | Ask the instance which REST APIs it publishes, down to the OpenAPI spec |
 | [`sn raw`](docs/usage.md#raw-rest-passthrough) | Passthrough for any REST endpoint not modeled above |
 | [`sn ping` / `sn open` / …](docs/usage.md#inspect-and-connect) | Health checks, opening records in the browser, shell completions |
 
@@ -89,10 +91,27 @@ stream record changes while a script runs, and read failures as data instead of 
 
 ## What's new
 
-**Unreleased:** [`sn journal`](docs/usage.md#journal-comments-and-work-notes) reads a
-record's comments and work notes as structured entries, and
-[`sn graphql`](docs/usage.md#graphql) runs GraphQL documents with in-band errors mapped
-to the exit-code contract.
+**0.12.0:** four new command groups. [`sn api`](docs/usage.md#api-discovery) asks the
+instance which REST APIs it actually publishes — every namespace, every endpoint with its
+method and route, and any API's OpenAPI 3 document — so finding an endpoint no longer
+means opening a browser; [`sn variables`](docs/agent-guide.md#catalog-variables-variables)
+reads and writes catalog variables on a record, re-reading after every write because that
+endpoint answers `200` for names it silently skipped;
+[`sn journal`](docs/usage.md#journal-comments-and-work-notes) parses comments and work
+notes into structured entries; and [`sn graphql`](docs/usage.md#graphql) runs GraphQL
+documents with in-band errors mapped to the exit-code contract.
+[`sn cmdb create`/`update`](docs/usage.md#cmdb) now send the envelope the CMDB Instance
+API requires, so `--field` on a CI works at all for the first time (a CLI write stamps
+`discovery_source`, `"Manual Entry"` unless you pass `--source`), and `sn ping` reports
+the identity the instance asserts rather than whichever `sys_user` row sorted first —
+which also means `sn ping`'s `username` can change if your config names someone the
+instance disagrees with. Three changes can break a script: that `username` semantic;
+`--all` no longer combines with `--output raw` or `--output table` (exit 1 — for table,
+buffer with [`--array`](docs/usage.md#pagination); for raw, drop `--all` and page with
+`--offset`/`--setlimit`); and six destructive commands — `profile remove`,
+`catalog cart-empty`, `catalog cart-remove`, `change conflict remove`,
+`updateset back-out`, `app rollback` — refuse to run without `--yes` when stdin is not a
+terminal. Details in the [changelog](CHANGELOG.md).
 
 **0.11.0:** the read verb is optional on `table` and `cmdb` (`sn table incident <SYS_ID>`
 just works — only reads are ever inferred, never a write), `sn raw` takes request headers,

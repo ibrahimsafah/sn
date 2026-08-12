@@ -36,8 +36,14 @@ pub struct CmdbListArgs {
     /// Encoded query, e.g. `active=true^priority=1`.
     #[arg(long, short = 'q', alias = "sysparm-query")]
     pub query: Option<String>,
-    /// Maximum records returned. Maps to sysparm_limit.
-    #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 1000)]
+    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
+    #[arg(
+        long,
+        alias = "sysparm-limit",
+        alias = "limit",
+        alias = "setLimit",
+        default_value_t = 1000
+    )]
     pub setlimit: u32,
     /// Starting offset for manual pagination.
     #[arg(long, alias = "sysparm-offset")]

@@ -66,8 +66,14 @@ pub struct ChangeListArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Maximum records returned. Maps to sysparm_limit.
-    #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 1000)]
+    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
+    #[arg(
+        long,
+        alias = "sysparm-limit",
+        alias = "limit",
+        alias = "setLimit",
+        default_value_t = 1000
+    )]
     pub setlimit: u32,
     /// Starting offset for manual pagination.
     #[arg(long, alias = "sysparm-offset")]
@@ -236,8 +242,14 @@ pub struct ChangeTaskListArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Maximum records returned. Maps to sysparm_limit.
-    #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 100)]
+    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
+    #[arg(
+        long,
+        alias = "sysparm-limit",
+        alias = "limit",
+        alias = "setLimit",
+        default_value_t = 100
+    )]
     pub setlimit: u32,
 }
 

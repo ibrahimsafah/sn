@@ -57,8 +57,14 @@ pub struct CatalogGetArgs {
 pub struct CatalogCategoriesArgs {
     /// Catalog sys_id.
     pub catalog_sys_id: String,
-    /// Maximum records returned. Maps to sysparm_limit.
-    #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 100)]
+    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
+    #[arg(
+        long,
+        alias = "sysparm-limit",
+        alias = "limit",
+        alias = "setLimit",
+        default_value_t = 100
+    )]
     pub setlimit: u32,
     /// Starting offset for manual pagination.
     #[arg(long, alias = "sysparm-offset")]
@@ -88,8 +94,14 @@ pub struct CatalogItemsArgs {
     /// Filter by type (e.g. `record_producer`).
     #[arg(long, alias = "sysparm-type")]
     pub item_type: Option<String>,
-    /// Maximum records returned. Maps to sysparm_limit.
-    #[arg(long, alias = "sysparm-limit", alias = "limit", default_value_t = 100)]
+    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
+    #[arg(
+        long,
+        alias = "sysparm-limit",
+        alias = "limit",
+        alias = "setLimit",
+        default_value_t = 100
+    )]
     pub setlimit: u32,
     /// Starting offset for manual pagination.
     #[arg(long, alias = "sysparm-offset")]

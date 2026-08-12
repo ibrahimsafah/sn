@@ -85,8 +85,8 @@ pub struct ScoresListArgs {
     /// Step between scores.
     #[arg(long, alias = "sysparm-step", help_heading = SCORE_DATA)]
     pub step: Option<u32>,
-    /// Maximum number of scores to return (-1 = all).
-    #[arg(long, alias = "sysparm-limit", help_heading = SCORE_DATA)]
+    /// Maximum number of scores to return (-1 = all). Also spelled --limit or --setLimit.
+    #[arg(long, alias = "sysparm-limit", alias = "limit", alias = "setLimit", help_heading = SCORE_DATA)]
     pub limit: Option<i64>,
     /// Include available breakdowns in the response.
     #[arg(long, alias = "sysparm-include-available-breakdowns", help_heading = ADVANCED)]

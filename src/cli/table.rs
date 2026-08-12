@@ -57,10 +57,11 @@ pub struct TableListArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Maximum records returned (default 1000). Maps to sysparm_limit.
+    /// Maximum records returned (default 1000). Maps to sysparm_limit. Also spelled --limit or --setLimit.
     #[arg(
         long,
         alias = "limit",
+        alias = "setLimit",
         alias = "sysparm-limit",
         alias = "page-size",
         default_value_t = 1000

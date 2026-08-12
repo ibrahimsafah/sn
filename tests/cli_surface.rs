@@ -317,3 +317,65 @@ fn unrecognized_subcommand_lists_the_valid_ones() {
         );
     }
 }
+
+/// `--setlimit` is named after GlideRecord's `setLimit()`, so a ServiceNow
+/// developer reaches for the camelCase spelling and clap — which matches long
+/// flags case-sensitively — rejected it. Every site that takes a record cap
+/// accepts all four spellings, so the muscle memory costs no round trip.
+#[test]
+fn every_record_cap_accepts_the_camel_case_spelling() {
+    let out = Command::cargo_bin("sn")
+        .unwrap()
+        .args(["introspect"])
+        .assert()
+        .success();
+    let tree: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
+    let mut missing = Vec::new();
+    find_setlimit(&tree, &mut Vec::new(), &mut missing);
+    assert!(
+        !missing.is_empty() || tree["subcommands"].as_array().is_none(),
+        "no `setlimit` argument found at all — did the flag get renamed?"
+    );
+    let gaps: Vec<_> = missing.iter().filter(|(_, ok)| !ok).collect();
+    assert!(
+        gaps.is_empty(),
+        "setlimit without a setLimit alias: {gaps:#?}"
+    );
+}
+
+fn find_setlimit(cmd: &Value, path: &mut Vec<String>, out: &mut Vec<(String, bool)>) {
+    path.push(cmd["name"].as_str().unwrap_or_default().to_string());
+    for arg in cmd["args"].as_array().into_iter().flatten() {
+        if arg["long"].as_str() == Some("setlimit") {
+            let aliases = arg["aliases"].as_array().cloned().unwrap_or_default();
+            let has = aliases.iter().any(|a| a.as_str() == Some("setLimit"));
+            out.push((path.join(" "), has));
+        }
+    }
+    for sub in cmd["subcommands"].as_array().into_iter().flatten() {
+        find_setlimit(sub, path, out);
+    }
+    path.pop();
+}
+
+/// The alias must not swallow a genuine typo: clap's near-miss suggestion is
+/// what turns `--setLimt` into a fixable mistake rather than a silent default.
+///
+/// Either spelling is a correct suggestion — with the alias in place clap
+/// offers `--setLimit`, which is one edit from what was typed and is a flag
+/// that works. What must never happen is the typo being accepted, or rejected
+/// with no pointer at all.
+#[test]
+fn a_misspelled_record_cap_still_suggests_the_real_flag() {
+    let out = Command::cargo_bin("sn")
+        .unwrap()
+        .args(["table", "list", "incident", "--setLimt", "5"])
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.to_lowercase().contains("setlimit"),
+        "a near-miss must still point at a flag that works:\n{stderr}"
+    );
+}

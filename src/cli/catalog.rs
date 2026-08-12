@@ -1,5 +1,5 @@
 use crate::body::{build_body, BodyInput};
-use crate::cli::table::{build_client, build_profile, unwrap_or_raw};
+use crate::cli::table::{build_client, build_profile, confirm_destructive, unwrap_or_raw};
 use crate::cli::GlobalFlags;
 use crate::error::Result;
 use clap::Subcommand;
@@ -130,12 +130,18 @@ pub struct CatalogCartUpdateArgs {
 pub struct CatalogCartItemArgs {
     /// sys_id of the cart item.
     pub cart_item_id: String,
+    /// Skip confirmation prompt (required for non-interactive use).
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct CatalogCartEmptyArgs {
     /// Cart sys_id.
     pub sys_id: String,
+    /// Skip confirmation prompt (required for non-interactive use).
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 const BASE: &str = "/api/sn_sc/servicecatalog";
@@ -290,6 +296,11 @@ pub fn cart_update(global: &GlobalFlags, args: CatalogCartUpdateArgs) -> Result<
 }
 
 pub fn cart_remove(global: &GlobalFlags, args: CatalogCartItemArgs) -> Result<()> {
+    confirm_destructive(
+        args.yes,
+        "remove",
+        &format!("cart item {}", args.cart_item_id),
+    )?;
     let profile = build_profile(global)?;
     let client = build_client(&profile, global.timeout)?;
     let path = format!("{BASE}/cart/{}", args.cart_item_id);
@@ -298,6 +309,9 @@ pub fn cart_remove(global: &GlobalFlags, args: CatalogCartItemArgs) -> Result<()
 }
 
 pub fn cart_empty(global: &GlobalFlags, args: CatalogCartEmptyArgs) -> Result<()> {
+    // One DELETE discards every line the caller built up, and the cart is not
+    // versioned anywhere — there is nothing to restore it from.
+    confirm_destructive(args.yes, "empty", &format!("cart {}", args.sys_id))?;
     let profile = build_profile(global)?;
     let client = build_client(&profile, global.timeout)?;
     let path = format!("{BASE}/cart/{}/empty", args.sys_id);

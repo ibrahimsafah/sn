@@ -32,7 +32,12 @@ pub(crate) fn finish_cicd(
     wait_timeout: Option<u64>,
 ) -> Result<()> {
     if wait {
-        if let Some(progress_id) = out
+        // Callers hand `out` over already shaped by `--output`, so under `raw`
+        // the progress link sits one level down inside the untouched envelope.
+        // Looking only at the top level made `--wait` a no-op there: no link
+        // found, no polling, initial response emitted as if it were final.
+        let body = out.get("result").unwrap_or(&out);
+        if let Some(progress_id) = body
             .get("links")
             .and_then(|l| l.get("progress"))
             .and_then(|p| p.get("id"))
@@ -47,8 +52,8 @@ pub(crate) fn finish_cicd(
 
 /// Poll `GET /api/sn_cicd/progress/{progress_id}` in a loop until the operation
 /// reaches a terminal state (Successful, Failed, or Cancelled) and return the
-/// final result value. `wait_timeout` bounds the total wait in seconds; `None`
-/// waits indefinitely.
+/// final result value, shaped by `global.output` like any other response.
+/// `wait_timeout` bounds the total wait in seconds; `None` waits indefinitely.
 ///
 /// Status codes:
 /// - "0" = Pending, "1" = Running, "2" = Successful, "3" = Failed, "4" = Cancelled
@@ -63,24 +68,39 @@ pub(crate) fn wait_for_completion(
         wait_timeout.map(|secs| std::time::Instant::now() + std::time::Duration::from_secs(secs));
     loop {
         let resp = client.get(&path, &[])?;
-        let result = unwrap_or_raw(resp, OutputMode::Default);
+        // Poll decisions always read the unwrapped body — `status` lives inside
+        // the `result` envelope — but what the caller finally sees is theirs to
+        // choose, so `--output raw` still hands back the envelope it asked for.
+        // Borrowed, not cloned: this runs every 2s for as long as the operation
+        // takes, and only the two terminal arms ever need to own the tree, so a
+        // clone here is one full deep copy per poll thrown away (a 30-minute
+        // `app install --wait` made ~900 of them and kept one).
+        let body = resp.get("result").unwrap_or(&resp);
 
-        let status = result.get("status").and_then(|s| s.as_str()).unwrap_or("1");
+        let status = body.get("status").and_then(|s| s.as_str()).unwrap_or("1");
 
         match status {
-            "2" => return Ok(result),
+            "2" => return Ok(unwrap_or_raw(resp, global.output)),
             "3" | "4" => {
-                let msg = result
+                // Terminal, so the response is ours to consume: the error
+                // envelope carries the whole unwrapped body in `sn_error`.
+                let result = unwrap_or_raw(resp, OutputMode::Default);
+                let message = result
                     .get("status_message")
                     .and_then(|s| s.as_str())
-                    .unwrap_or("operation failed");
+                    .unwrap_or("operation failed")
+                    .to_string();
+                let detail = result
+                    .get("status_detail")
+                    .and_then(|s| s.as_str())
+                    .map(String::from);
+                // The HTTP call succeeded; the *operation* failed. There is no
+                // HTTP status to report, and the envelope must omit the key
+                // rather than invent one.
                 return Err(Error::Api {
-                    status: 0,
-                    message: msg.to_string(),
-                    detail: result
-                        .get("status_detail")
-                        .and_then(|s| s.as_str())
-                        .map(String::from),
+                    status: crate::error::NO_HTTP_STATUS,
+                    message,
+                    detail,
                     transaction_id: None,
                     sn_error: Some(result),
                 });
@@ -90,7 +110,7 @@ pub(crate) fn wait_for_completion(
                     // ServiceNow sends percent_complete as a JSON string ("100") on
                     // some operations and a number (0) on others, so `.as_str()`
                     // alone silently printed nothing half the time.
-                    let pct = result.get("percent_complete").and_then(|v| {
+                    let pct = body.get("percent_complete").and_then(|v| {
                         v.as_str()
                             .map(str::to_string)
                             .or_else(|| v.as_f64().map(|n| n.to_string()))

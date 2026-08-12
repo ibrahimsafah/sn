@@ -656,10 +656,14 @@ fn concurrent_removes_adds_and_uses_are_all_serialized() {
 
     let mut children = Vec::new();
     for i in 0..N {
+        // `--yes` because these children have no terminal: `profile remove` is
+        // gated like every other destructive command and refuses a
+        // non-interactive stdin without it.
         children.push(spawn(vec![
             "profile".into(),
             "remove".into(),
             format!("p{i}"),
+            "--yes".into(),
         ]));
         children.push(spawn(vec![
             "profile".into(),

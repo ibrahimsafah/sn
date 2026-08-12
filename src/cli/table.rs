@@ -6,7 +6,7 @@ use crate::config::{
     AuthMethod, ProfileResolverInputs, ResolvedProfile,
 };
 use crate::error::{Error, Result};
-use crate::output::{emit_value, Format, ResolvedFormat};
+use crate::output::{Format, ResolvedFormat};
 use crate::query::{DeleteQuery, GetQuery, ListQuery, WriteQuery};
 use clap::{Subcommand, ValueEnum};
 use is_terminal::IsTerminal;
@@ -252,12 +252,21 @@ pub struct TableDeleteArgs {
 }
 
 pub fn list(global: &GlobalFlags, args: TableListArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
-
     let paginate = args.all;
     let array = args.array;
     let max_records = args.max_records;
+
+    // Before `build_profile`/`build_client`, because this reads nothing but
+    // argv and must not be preempted by them. `build_client` mints an OAuth
+    // token, so a guard placed after it turns an unreachable instance or an
+    // IdP outage into exit 3 for what is a fixable typo in the caller's own
+    // command line — the usage error (exit 1) never gets a chance to print.
+    if paginate {
+        reject_unstreamable_output(global.output, array)?;
+    }
+
+    let profile = build_profile(global)?;
+    let client = build_client(&profile, global.timeout)?;
 
     let q = ListQuery {
         query: args.query,
@@ -374,7 +383,11 @@ pub(crate) fn bool_opt(b: bool) -> Option<bool> {
     }
 }
 
-pub(crate) fn format_from_flags(g: &GlobalFlags) -> ResolvedFormat {
+/// Private on purpose: `write_response` is the single place a command's final
+/// value reaches stdout, and it is the only thing that routes `--output table`.
+/// Every module that reached for this instead silently ignored that flag, so
+/// keeping it unreachable makes the convention a compile error to break.
+fn format_from_flags(g: &GlobalFlags) -> ResolvedFormat {
     if g.pretty {
         Format::Pretty.resolve()
     } else if g.compact {
@@ -384,10 +397,59 @@ pub(crate) fn format_from_flags(g: &GlobalFlags) -> ResolvedFormat {
     }
 }
 
+/// Unwrap the `{"result": ...}` envelope unless `--output raw` asked to keep it.
+///
+/// Takes `v` by value and moves the subtree out: this runs on every command's
+/// response, and cloning it allocated once per string and map in the tree.
 pub(crate) fn unwrap_or_raw(v: Value, mode: OutputMode) -> Value {
     match mode {
         OutputMode::Raw => v,
-        OutputMode::Default | OutputMode::Table => v.get("result").cloned().unwrap_or(v),
+        OutputMode::Default | OutputMode::Table => match v {
+            Value::Object(mut m) => match m.remove("result") {
+                Some(r) => r,
+                None => Value::Object(m),
+            },
+            other => other,
+        },
+    }
+}
+
+/// Take one key out of a JSON object by value, for the same reason
+/// [`unwrap_or_raw`] moves: the caller owns the response and is about to drop
+/// the rest of it. `None` for a missing key or a non-object.
+pub(crate) fn take_field(v: Value, key: &str) -> Option<Value> {
+    match v {
+        Value::Object(mut m) => m.remove(key),
+        _ => None,
+    }
+}
+
+/// Refuse the `--output` modes that `--all` cannot honor, instead of accepting
+/// the flag and emitting JSONL anyway.
+///
+/// `--all` streams: the paginator flattens every page's `result` envelope into a
+/// record-at-a-time iterator of unbounded length.
+/// - `--output raw` means "keep the envelope", and after that flattening there
+///   is no envelope left to keep — in the `--array` form either, which is why
+///   this rejects raw for both.
+/// - `--output table` has to see every row before it can size a column, so it
+///   cannot render a stream. `--array` buffers the whole result set (bounded by
+///   `--max-records`), which is exactly what the renderer needs — so that form
+///   is allowed, and is what the error points at.
+fn reject_unstreamable_output(mode: OutputMode, array: bool) -> Result<()> {
+    match mode {
+        OutputMode::Raw => Err(Error::Usage(
+            "--output raw cannot be combined with --all: pagination flattens each page's \
+             envelope into a record stream, so there is no envelope to keep; drop --all and \
+             page with --offset/--setlimit, or drop --output raw"
+                .into(),
+        )),
+        OutputMode::Table if !array => Err(Error::Usage(
+            "--output table cannot render the unbounded stream --all produces; add --array to \
+             buffer the records (capped by --max-records), or drop --all"
+                .into(),
+        )),
+        _ => Ok(()),
     }
 }
 
@@ -398,8 +460,7 @@ pub(crate) fn write_response(global: &GlobalFlags, value: &Value) -> Result<()> 
     if matches!(global.output, OutputMode::Table) {
         crate::output_table::write_table(value)
     } else {
-        emit_value(io::stdout().lock(), value, format_from_flags(global))
-            .map_err(crate::output::map_stdout_err)
+        crate::output::write_value(value, format_from_flags(global))
     }
 }
 
@@ -509,21 +570,40 @@ fn write_op(
     crate::cli::table::write_response(global, &out)
 }
 
-/// Gate a destructive operation behind a confirmation, shared by every `delete`
-/// command. With `--yes` it is a no-op; otherwise it refuses to proceed on a
-/// non-interactive stdin (exit 1) and, on a TTY, prompts `Delete {what}? [y/N]:`
-/// and aborts unless the answer is affirmative. `what` names the target, e.g.
-/// `incident/abc123`, `attachment abc123`, or `relation r1 on cmdb_ci_server/x`.
-pub(crate) fn confirm_delete(yes: bool, what: &str) -> Result<()> {
+/// Gate a destructive operation behind a confirmation, shared by every command
+/// that removes or undoes instance state. With `--yes` it is a no-op; otherwise
+/// it refuses to proceed on a non-interactive stdin (exit 1) and, on a TTY,
+/// prompts `{Verb} {what}? [y/N]:` and aborts unless the answer is affirmative.
+///
+/// `verb` is a lowercase imperative — `delete`, `remove`, `empty`, `back out`,
+/// `roll back` — and appears verbatim in the non-TTY refusal, so the message
+/// names the operation the caller actually asked for. It was hardcoded to
+/// "delete" until 0.12.0, which is why the commands that undo rather than
+/// delete never got a gate: the only phrasing on offer was a lie. Match it to
+/// the command's own name (`sn catalog cart-remove` refuses with "remove", not
+/// "delete"), or a caller grepping stderr for the operation they ran finds a
+/// word that appears nowhere in their argv.
+///
+/// `what` names the target — `incident/abc123`, `relation r1 on
+/// cmdb_ci_server/x`, `profile prod and its stored credentials` — and is part
+/// of the refusal too, not just the prompt: the non-TTY path is the one a
+/// script reads, and "requires --yes" alone says which flag to add but not what
+/// it would have been added to.
+pub(crate) fn confirm_destructive(yes: bool, verb: &str, what: &str) -> Result<()> {
     if yes {
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
-        return Err(Error::Usage(
-            "delete requires --yes when stdin is not a terminal".into(),
-        ));
+        return Err(Error::Usage(format!(
+            "{verb} {what} requires --yes when stdin is not a terminal"
+        )));
     }
-    eprint!("Delete {what}? [y/N]: ");
+    let mut chars = verb.chars();
+    let verb = match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    };
+    eprint!("{verb} {what}? [y/N]: ");
     let mut s = String::new();
     std::io::stdin()
         .read_line(&mut s)
@@ -532,6 +612,12 @@ pub(crate) fn confirm_delete(yes: bool, what: &str) -> Result<()> {
         return Err(Error::Usage("aborted".into()));
     }
     Ok(())
+}
+
+/// [`confirm_destructive`] for the `delete` verb — the shape every `delete`
+/// command wants, and the one `attachment`/`cmdb` still call by this name.
+pub(crate) fn confirm_delete(yes: bool, what: &str) -> Result<()> {
+    confirm_destructive(yes, "delete", what)
 }
 
 pub fn delete(global: &GlobalFlags, args: TableDeleteArgs) -> Result<()> {

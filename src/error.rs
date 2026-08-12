@@ -3,6 +3,26 @@ use thiserror::Error;
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
 
+/// `Error::Api::status` for a failure that never carried an HTTP status: a CICD
+/// operation the instance reports as failed *inside* a 200 response body. The
+/// stderr envelope then omits `status_code` entirely rather than publishing a
+/// fake `0` — agents branch on that key, and no HTTP response can carry 0.
+///
+/// A sentinel rather than `Option<u16>` because every other construction site of
+/// `Error::Api` does have a real status; the option would be `Some(..)` noise at
+/// all of them.
+pub const NO_HTTP_STATUS: u16 = 0;
+
+/// `" (404)"` for a real HTTP status, `""` for [`NO_HTTP_STATUS`], so the
+/// `Display` text never claims a status the failure did not have.
+fn status_suffix(status: u16) -> String {
+    if status == NO_HTTP_STATUS {
+        String::new()
+    } else {
+        format!(" ({status})")
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum Error {
     #[error("usage error: {0}")]
@@ -11,7 +31,7 @@ pub enum Error {
     #[error("configuration error: {0}")]
     Config(String),
 
-    #[error("API error ({status}): {message}")]
+    #[error("API error{}: {message}", status_suffix(*status))]
     Api {
         status: u16,
         message: String,
@@ -78,7 +98,7 @@ impl Error {
             } => (
                 message.clone(),
                 detail.as_deref(),
-                Some(*status),
+                (*status != NO_HTTP_STATUS).then_some(*status),
                 transaction_id.as_deref(),
                 sn_error.as_ref(),
             ),
@@ -154,6 +174,26 @@ mod tests {
         assert_eq!(v["error"]["status_code"], 404);
         assert_eq!(v["error"]["transaction_id"], "tx1");
         assert_eq!(v["error"]["sn_error"]["message"], "nope");
+    }
+
+    #[test]
+    fn stderr_envelope_omits_status_code_for_statusless_api_errors() {
+        // A failed CICD wait: the HTTP call succeeded, the *operation* failed. The
+        // key must be absent, not null and not 0 — agents branch on its presence.
+        let e = Error::Api {
+            status: NO_HTTP_STATUS,
+            message: "update set commit failed".into(),
+            detail: None,
+            transaction_id: None,
+            sn_error: None,
+        };
+        let v = e.to_stderr_json();
+        assert!(
+            v["error"].get("status_code").is_none(),
+            "status_code must be absent: {v}"
+        );
+        assert_eq!(e.exit_code(), 2);
+        assert_eq!(e.to_string(), "API error: update set commit failed");
     }
 
     #[test]

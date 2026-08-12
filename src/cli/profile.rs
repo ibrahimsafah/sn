@@ -1,5 +1,5 @@
 use crate::cli::auth::{complete_oauth_login, whoami};
-use crate::cli::table::{build_client, build_profile, write_response};
+use crate::cli::table::{build_client, build_profile, confirm_destructive, write_response};
 use crate::cli::GlobalFlags;
 use crate::config::{
     self, config_path, credentials_path, default_redirect_uri, load_config_from,
@@ -27,6 +27,9 @@ pub enum ProfileSub {
     Remove {
         /// Profile to remove.
         name: String,
+        /// Skip confirmation prompt (required for non-interactive use).
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
     /// Make a profile the default for subsequent commands.
     Use {
@@ -94,8 +97,8 @@ pub fn run(global: &GlobalFlags, sub: ProfileSub) -> Result<()> {
         ProfileSub::Add(args) => add(global, args),
         ProfileSub::List => list(global),
         ProfileSub::Show { name } => show(global, name),
-        ProfileSub::Remove { name } => remove(name),
-        ProfileSub::Use { name } => set_default(name),
+        ProfileSub::Remove { name, yes } => remove(global, name, yes),
+        ProfileSub::Use { name } => set_default(global, name),
     }
 }
 
@@ -120,6 +123,44 @@ fn grant_str(g: OAuthGrant) -> &'static str {
 // touches `default_profile`; `init` upserts and always claims the default — so
 // everything below is policy-free and takes the decision as an argument.
 // ---------------------------------------------------------------------------
+
+/// Which command's flag vocabulary the core should speak when a field is
+/// missing and there is nobody to prompt.
+///
+/// `sn init` and `sn profile add` share this code but not their argument lists:
+/// `init` has no `--password-stdin`, `--client-secret-stdin` or
+/// `--non-interactive`. An error naming a flag the invoked command does not
+/// accept sends the caller to a dead end, so every message is phrased for the
+/// command that was actually run.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Caller {
+    Init,
+    ProfileAdd,
+}
+
+impl Caller {
+    /// The other way to reach a non-interactive run, when the command has one.
+    fn non_interactive_hint(self) -> &'static str {
+        match self {
+            Caller::Init => "",
+            Caller::ProfileAdd => " (or with --non-interactive)",
+        }
+    }
+
+    fn password_flag(self) -> &'static str {
+        match self {
+            Caller::Init => "--password",
+            Caller::ProfileAdd => "--password (or --password-stdin)",
+        }
+    }
+
+    fn client_secret_flag(self) -> &'static str {
+        match self {
+            Caller::Init => "--client-secret",
+            Caller::ProfileAdd => "--client-secret (or --client-secret-stdin)",
+        }
+    }
+}
 
 /// One profile's worth of settings, with every prompt and flag already resolved.
 pub(crate) struct ProfileInput {
@@ -167,7 +208,11 @@ fn is_interactive(args: &ProfileAddArgs) -> bool {
 /// away. `name_default` is the name to assume when none is given and there is
 /// nobody to ask (`sn init` uses "default"; `sn profile add` has none, so the
 /// name is required).
-pub(crate) fn resolve_name(args: &ProfileAddArgs, name_default: Option<String>) -> Result<String> {
+pub(crate) fn resolve_name(
+    args: &ProfileAddArgs,
+    name_default: Option<String>,
+    caller: Caller,
+) -> Result<String> {
     // Show the fallback in the prompt when there is one, so `sn init` still reads
     // `Profile name [default]:` and the reader knows what Enter will do.
     let msg = match &name_default {
@@ -176,7 +221,7 @@ pub(crate) fn resolve_name(args: &ProfileAddArgs, name_default: Option<String>) 
     };
     let name = match &args.name {
         Some(v) => v.clone(),
-        None => ask(is_interactive(args), &msg, name_default, "NAME")?,
+        None => ask(is_interactive(args), &msg, name_default, "NAME", caller)?,
     };
     let name = name.trim().to_string();
     if name.is_empty() {
@@ -190,7 +235,11 @@ pub(crate) fn resolve_name(args: &ProfileAddArgs, name_default: Option<String>) 
 /// Prompting only ever happens on a terminal: with `--non-interactive`, or when
 /// stdin is a pipe, a field with no default names the flag that would supply it
 /// rather than blocking on a read that will never be answered.
-pub(crate) fn resolve_input(args: &ProfileAddArgs, name: String) -> Result<ProfileInput> {
+pub(crate) fn resolve_input(
+    args: &ProfileAddArgs,
+    name: String,
+    caller: Caller,
+) -> Result<ProfileInput> {
     let interactive = is_interactive(args);
 
     let instance = match &args.instance {
@@ -200,6 +249,7 @@ pub(crate) fn resolve_input(args: &ProfileAddArgs, name: String) -> Result<Profi
             "Instance (e.g. 'dev380385' or 'https://acme.service-now.com'): ",
             None,
             "--instance",
+            caller,
         )?,
     };
     let instance = normalize_instance(&instance);
@@ -216,6 +266,7 @@ pub(crate) fn resolve_input(args: &ProfileAddArgs, name: String) -> Result<Profi
             "Auth method (basic/oauth) [basic]: ",
             Some("basic".into()),
             "--auth",
+            caller,
         )?
         .to_ascii_lowercase()
         .as_str()
@@ -247,14 +298,14 @@ pub(crate) fn resolve_input(args: &ProfileAddArgs, name: String) -> Result<Profi
         AuthMethod::Basic => {
             input.username = match &args.username {
                 Some(v) => v.clone(),
-                None => ask(interactive, "Username: ", None, "--username")?,
+                None => ask(interactive, "Username: ", None, "--username", caller)?,
             };
             input.password = match (&args.password, args.password_stdin) {
                 (Some(v), _) => v.clone(),
                 (None, true) => read_secret_stdin()?,
                 (None, false) if interactive => rpassword::prompt_password("Password: ")
                     .map_err(|e| Error::Usage(format!("read password: {e}")))?,
-                (None, false) => return Err(missing("--password (or --password-stdin)")),
+                (None, false) => return Err(missing(caller.password_flag(), caller)),
             };
             if input.username.trim().is_empty() || input.password.is_empty() {
                 return Err(Error::Usage(
@@ -265,7 +316,13 @@ pub(crate) fn resolve_input(args: &ProfileAddArgs, name: String) -> Result<Profi
         AuthMethod::Oauth => {
             input.client_id = match &args.client_id {
                 Some(v) => v.clone(),
-                None => ask(interactive, "OAuth client_id: ", None, "--client-id")?,
+                None => ask(
+                    interactive,
+                    "OAuth client_id: ",
+                    None,
+                    "--client-id",
+                    caller,
+                )?,
             };
             if input.client_id.trim().is_empty() {
                 return Err(Error::Usage("client_id is required for oauth".into()));
@@ -295,7 +352,7 @@ pub(crate) fn resolve_input(args: &ProfileAddArgs, name: String) -> Result<Profi
                     Some(s)
                 }
                 (None, false, OAuthGrant::ClientCredentials, false) => {
-                    return Err(missing("--client-secret (or --client-secret-stdin)"))
+                    return Err(missing(caller.client_secret_flag(), caller))
                 }
                 (None, false, OAuthGrant::AuthorizationCode, _) => None,
             };
@@ -313,6 +370,7 @@ pub(crate) fn resolve_input(args: &ProfileAddArgs, name: String) -> Result<Profi
                         &format!("Redirect URI [{d}]: "),
                         Some(d),
                         "--redirect-uri",
+                        caller,
                     )?)
                 }
                 (None, OAuthGrant::AuthorizationCode) => None,
@@ -563,9 +621,15 @@ pub(crate) fn save_and_verify(
 /// nobody to ask — resolves to it. Without one the field is required, and a
 /// non-interactive run names the flag that supplies it instead of hanging on a
 /// stdin nobody will type into.
-fn ask(interactive: bool, msg: &str, default: Option<String>, flag: &str) -> Result<String> {
+fn ask(
+    interactive: bool,
+    msg: &str,
+    default: Option<String>,
+    flag: &str,
+    caller: Caller,
+) -> Result<String> {
     if !interactive {
-        return default.ok_or_else(|| missing(flag));
+        return default.ok_or_else(|| missing(flag, caller));
     }
     print!("{msg}");
     io::stdout().flush().ok();
@@ -581,9 +645,10 @@ fn ask(interactive: bool, msg: &str, default: Option<String>, flag: &str) -> Res
     })
 }
 
-fn missing(flag: &str) -> Error {
+fn missing(flag: &str, caller: Caller) -> Error {
     Error::Usage(format!(
-        "{flag} is required when stdin is not a terminal (or with --non-interactive)"
+        "{flag} is required when stdin is not a terminal{}",
+        caller.non_interactive_hint()
     ))
 }
 
@@ -635,7 +700,7 @@ fn add(global: &GlobalFlags, args: ProfileAddArgs) -> Result<()> {
 
     // Settle the name first: refusing to clobber is only useful if it happens
     // before we prompt for an instance and a password we would then discard.
-    let name = resolve_name(&args, None)?;
+    let name = resolve_name(&args, None, Caller::ProfileAdd)?;
     let existing = load_config_from(&config_path()?)?;
     if existing.profiles.contains_key(&name) && !args.force {
         return Err(Error::Usage(format!(
@@ -643,7 +708,7 @@ fn add(global: &GlobalFlags, args: ProfileAddArgs) -> Result<()> {
         )));
     }
 
-    let input = resolve_input(&args, name)?;
+    let input = resolve_input(&args, name, Caller::ProfileAdd)?;
 
     // The browser flow is the only way to test authorization_code credentials,
     // and there is no browser to open here. Refuse rather than save a profile
@@ -762,26 +827,56 @@ fn show(global: &GlobalFlags, name: Option<String>) -> Result<()> {
 
 /// `sn profile remove` — drop a profile from both files under one lock.
 ///
+/// Deliberately idempotent — removing a profile that isn't there is not an
+/// error — so the result says what actually happened rather than leaving the
+/// caller to re-read the config to find out.
+///
 /// `config.toml` goes first, the mirror of `save_profile`'s order: an unlocked
 /// reader that runs between the renames sees the profile already absent from
 /// config, which resolves as "not found", rather than present with its
 /// credentials already gone. See `config::LOCK_FILE` for why that is narrower
 /// than the guarantee `save_profile` gets.
-fn remove(name: String) -> Result<()> {
-    config::with_config_lock(|| {
+fn remove(global: &GlobalFlags, name: String, yes: bool) -> Result<()> {
+    // The one destructive command with no remote copy to re-fetch from: the
+    // password or OAuth tokens in credentials.toml exist nowhere else.
+    confirm_destructive(
+        yes,
+        "remove",
+        &format!("profile {name} and its stored credentials"),
+    )?;
+    // The lock spans the read as well as the writes: without it this would
+    // write back a pair of files it read before a concurrent `sn profile add`
+    // landed, deleting that profile. Emission stays outside — stdout is not
+    // shared state and holding the lock across it would serialize writers
+    // behind a slow pipe.
+    let (removed, was_default) = config::with_config_lock(|| {
         let cfg_path = config_path()?;
         let cred_path = credentials_path()?;
         let mut cfg = load_config_from(&cfg_path)?;
         let mut creds = load_credentials_from(&cred_path)?;
-        cfg.profiles.remove(&name);
-        creds.profiles.remove(&name);
-        if cfg.default_profile.as_deref() == Some(&name) {
+        let had_config = cfg.profiles.remove(&name).is_some();
+        let had_creds = creds.profiles.remove(&name).is_some();
+        let was_default = cfg.default_profile.as_deref() == Some(&name);
+        if was_default {
             cfg.default_profile = None;
         }
         save_config_to(&cfg_path, &cfg)?;
         save_credentials_to(&cred_path, &creds)?;
-        Ok(())
-    })
+        Ok((had_config || had_creds, was_default))
+    })?;
+
+    let mut out = json!({
+        "ok": true,
+        "profile": name,
+        "removed": removed,
+        "wasDefault": was_default,
+    });
+    // Dropping the default leaves every later command with nothing to resolve,
+    // which is worth saying here rather than at the next command's failure.
+    if was_default {
+        out["next"] = json!("sn profile use <name>");
+    }
+    write_response(global, &out)
 }
 
 /// `sn profile use` — repoint `default_profile`.
@@ -789,17 +884,20 @@ fn remove(name: String) -> Result<()> {
 /// One file, but still a read → modify → write: without the lock it would
 /// happily write back a `config.toml` it read before a concurrent
 /// `sn profile add` landed, deleting that profile.
-fn set_default(name: String) -> Result<()> {
+fn set_default(global: &GlobalFlags, name: String) -> Result<()> {
     config::with_config_lock(|| {
         let cfg_path = config_path()?;
         let mut cfg = load_config_from(&cfg_path)?;
         if !cfg.profiles.contains_key(&name) {
             return Err(Error::Usage(format!("profile '{name}' not found")));
         }
-        cfg.default_profile = Some(name);
-        save_config_to(&cfg_path, &cfg)?;
-        Ok(())
-    })
+        cfg.default_profile = Some(name.clone());
+        save_config_to(&cfg_path, &cfg)
+    })?;
+    write_response(
+        global,
+        &json!({ "ok": true, "profile": name, "default": true }),
+    )
 }
 
 #[cfg(test)]

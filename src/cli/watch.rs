@@ -78,7 +78,7 @@ use crate::client::Client;
 use crate::config::ResolvedProfile;
 use crate::error::{Error, Result};
 use crate::observability::log_note;
-use crate::output::{map_stdout_err, write_jsonl_line};
+use crate::output::write_jsonl_line;
 use crate::query::GetQuery;
 use clap::{Subcommand, ValueEnum};
 use serde_json::{json, Value};
@@ -649,12 +649,17 @@ impl<W: Write> Stream<W> {
         idle.is_some_and(|i| self.last_event.elapsed() >= i)
     }
 
-    /// One JSON value per line, flushed immediately. Without the flush a piped
-    /// stdout is block-buffered and `sn watch … | jq` would look frozen for
-    /// minutes.
+    /// One JSON value per line, flushed immediately — without that, a piped
+    /// stdout is block-buffered and `sn watch … | jq` looks frozen for minutes.
+    ///
+    /// The flush belongs to [`write_jsonl_line`], which owns it for every
+    /// streaming caller. Repeating it here is not merely redundant: a second
+    /// flush is a second syscall on a pipe that may already be gone, so a
+    /// reader that closed after the first one turns the *next* record's write
+    /// into the failure instead of this one, and the error is attributed to the
+    /// wrong record.
     fn write(&mut self, v: &Value) -> Result<()> {
-        write_jsonl_line(&mut self.out, v)?;
-        self.out.flush().map_err(map_stdout_err)
+        write_jsonl_line(&mut self.out, v)
     }
 }
 

@@ -53,6 +53,21 @@ pub enum Error {
     /// Downstream consumer closed the pipe (e.g. `sn … | head`). Silent exit 0.
     #[error("broken pipe")]
     BrokenPipe,
+
+    /// The instance returned HTTP success, but the response does not answer what
+    /// was asked and must not be handed back as if it did — a scripted query
+    /// term the instance silently dropped, a filter that never applied.
+    ///
+    /// Deliberately carries **no** status: there was no HTTP error, so any
+    /// `status_code` here would be a fabrication (`status_code: 200` on a
+    /// failure), and agents branch on that field. Same exit code as [`Error::Api`]
+    /// — this is still the instance failing to serve the request — but the key is
+    /// absent from the stderr envelope rather than lying.
+    #[error("instance error: {message}")]
+    Instance {
+        message: String,
+        detail: Option<String>,
+    },
 }
 
 impl Error {
@@ -64,6 +79,7 @@ impl Error {
             Error::Api { .. } => 2,
             Error::Transport(_) => 3,
             Error::Auth { .. } => 4,
+            Error::Instance { .. } => 2,
         }
     }
 
@@ -114,6 +130,10 @@ impl Error {
                 None,
             ),
             Error::Transport(m) => (m.clone(), None, None, None, None),
+            // No `status_code`: see the variant's doc comment.
+            Error::Instance { message, detail } => {
+                (message.clone(), detail.as_deref(), None, None, None)
+            }
         };
         serde_json::to_value(Envelope {
             error: Inner {
@@ -194,6 +214,32 @@ mod tests {
         );
         assert_eq!(e.exit_code(), 2);
         assert_eq!(e.to_string(), "API error: update set commit failed");
+    }
+
+    /// The sibling mechanism: `Api` with [`NO_HTTP_STATUS`] is an HTTP call that
+    /// succeeded around a failed *operation*; `Instance` is an HTTP 200 whose
+    /// body does not answer the question. Different causes, same contract — no
+    /// invented `status_code` — so both are pinned.
+    #[test]
+    fn instance_errors_carry_no_status_code() {
+        // An HTTP 200 whose body is untrustworthy is not an HTTP failure. Emitting
+        // `status_code: 200` on it describes an error that never happened, and
+        // agents branch on that field — so the key must be absent entirely.
+        let e = Error::Instance {
+            message: "the query was not evaluated".into(),
+            detail: Some("scripted query evaluation appears to be disabled".into()),
+        };
+        assert_eq!(e.exit_code(), 2);
+        let v = e.to_stderr_json();
+        assert_eq!(v["error"]["message"], "the query was not evaluated");
+        assert_eq!(
+            v["error"]["detail"],
+            "scripted query evaluation appears to be disabled"
+        );
+        assert!(
+            v["error"].get("status_code").is_none(),
+            "a non-HTTP failure must not report an HTTP status: {v}"
+        );
     }
 
     #[test]

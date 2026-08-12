@@ -95,6 +95,15 @@
 
 ### Changed
 
+- **`--setLimit` is accepted wherever `--setlimit` is, and `--help` now names the
+  alternatives.** Long flags match case-sensitively, so the camelCase spelling was rejected —
+  and the flag is named after GlideRecord's `setLimit()`, so it is the spelling a ServiceNow
+  developer already has in muscle memory. `--limit`, `--sysparm-limit` and `--page-size` were
+  *already* accepted at every record-cap site but invisible, because clap prints only an
+  argument's canonical name; each flag's help text now lists them. A genuine typo still gets
+  clap's suggestion, and `sn introspect` already published `aliases`, so nothing about the
+  machine-readable contract changes.
+
 - **`--all` can no longer be combined with `--output raw` or `--output table`.** Both were
   accepted and then ignored — `sn table list incident --all --output table` streamed JSONL
   like any other `--all`. Both are now usage errors (exit 1) naming the conflict. Table

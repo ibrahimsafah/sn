@@ -239,13 +239,19 @@ fn separate_processes_do_not_clobber_each_other() {
                 .arg(format!("p{i}"))
                 .env("SN_CONFIG_DIR", dir.path())
                 .env_remove("XDG_CONFIG_HOME")
-                .stdout(std::process::Stdio::null());
+                .stdout(std::process::Stdio::piped())
+                .stderr(std::process::Stdio::piped());
             cmd.spawn().expect("spawn sn auth logout")
         })
         .collect();
-    for mut child in children {
-        let status = child.wait().unwrap();
-        assert!(status.success(), "sn auth logout failed: {status:?}");
+    for (i, child) in children.into_iter().enumerate() {
+        let out = child.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "sn auth logout p{i} exited {:?}\nstderr: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
 
     let creds = load_credentials_from(&dir.path().join("credentials.toml")).unwrap();
@@ -297,14 +303,23 @@ fn concurrent_profile_adds_all_survive() {
             ])
             .env("SN_CONFIG_DIR", dir.path())
             .env_remove("XDG_CONFIG_HOME")
-            .stdout(std::process::Stdio::null());
+            // Piped, not null: the child's stderr *is* the diagnosis when this
+            // fails on a platform the test cannot be run on by hand. All twelve
+            // are spawned before any is drained, so the concurrency is intact,
+            // and each writes well under a pipe buffer.
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
             cmd.spawn().expect("spawn sn profile add")
         })
         .collect();
-    for mut child in children {
+    for (i, child) in children.into_iter().enumerate() {
+        let out = child.wait_with_output().unwrap();
         assert!(
-            child.wait().unwrap().success(),
-            "sn profile add reported failure"
+            out.status.success(),
+            "sn profile add p{i} exited {:?}\nstdout: {}\nstderr: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stdout).trim(),
+            String::from_utf8_lossy(&out.stderr).trim()
         );
     }
 
@@ -643,15 +658,18 @@ fn concurrent_removes_adds_and_uses_are_all_serialized() {
     save_credentials_to(&dir.path().join("credentials.toml"), &creds).unwrap();
     save_config_to(&dir.path().join("config.toml"), &cfg).unwrap();
 
+    // Output is piped rather than dropped so a failure names the command that
+    // failed and why; every child is spawned before any is drained.
     let spawn = |args: Vec<String>| {
-        std::process::Command::new(&bin)
+        let child = std::process::Command::new(&bin)
             .args(&args)
             .env("SN_CONFIG_DIR", dir.path())
             .env_remove("XDG_CONFIG_HOME")
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
             .spawn()
-            .expect("spawn sn")
+            .expect("spawn sn");
+        (args.join(" "), child)
     };
 
     let mut children = Vec::new();
@@ -679,8 +697,14 @@ fn concurrent_removes_adds_and_uses_are_all_serialized() {
         ]));
         children.push(spawn(vec!["profile".into(), "use".into(), "keep".into()]));
     }
-    for mut c in children {
-        assert!(c.wait().unwrap().success(), "an sn profile command failed");
+    for (args, c) in children {
+        let out = c.wait_with_output().unwrap();
+        assert!(
+            out.status.success(),
+            "`sn {args}` exited {:?}\nstderr: {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        );
     }
 
     let cfg = load_config_from(&dir.path().join("config.toml")).unwrap();

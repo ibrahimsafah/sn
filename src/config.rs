@@ -542,6 +542,45 @@ pub fn update_credentials_at<T>(
     Ok(out)
 }
 
+/// How long an operation on a config file may keep retrying a *transient*
+/// Windows sharing failure. Must stay well under [`LOCK_TIMEOUT`]: a writer
+/// retrying here is holding the directory lock, and every waiter behind it is
+/// spending its own 10s budget.
+const TRANSIENT_IO_BUDGET: Duration = Duration::from_secs(2);
+
+/// Whether an I/O error means "this name is momentarily in use", not "this will
+/// never work".
+///
+/// Windows has no `rename(2)`: replacing a file is `MoveFileExW`, which must
+/// open the destination for delete, and any other process holding it — a reader
+/// (`sn` takes no lock to *read*), a virus scanner, a search indexer — or a
+/// destination still delete-pending from the previous replacement makes that
+/// open fail. `ERROR_SHARING_VIOLATION` and `ERROR_LOCK_VIOLATION` say so
+/// plainly; `ERROR_ACCESS_DENIED` is the one delete-pending reports, and it is
+/// indistinguishable from a real permission failure — hence a *bounded* retry
+/// that still surfaces the error rather than a loop.
+///
+/// Measured: twelve concurrent `sn profile add`s against one config directory
+/// on windows-latest, one of which died with `replace config.toml: Access is
+/// denied. (os error 5)`. Unix has no equivalent — `rename(2)` cannot fail
+/// because someone has the destination open, so an `EACCES` there is permanent
+/// and must be reported at once.
+#[cfg(windows)]
+fn is_transient_sharing_error(e: &std::io::Error) -> bool {
+    const ERROR_ACCESS_DENIED: i32 = 5;
+    const ERROR_SHARING_VIOLATION: i32 = 32;
+    const ERROR_LOCK_VIOLATION: i32 = 33;
+    matches!(
+        e.raw_os_error(),
+        Some(ERROR_ACCESS_DENIED | ERROR_SHARING_VIOLATION | ERROR_LOCK_VIOLATION)
+    )
+}
+
+#[cfg(not(windows))]
+fn is_transient_sharing_error(_e: &std::io::Error) -> bool {
+    false
+}
+
 /// A temp file in `dir`, created 0600 by `open(2)` itself.
 ///
 /// The mode is passed to the open, never applied afterwards: create-then-chmod
@@ -592,10 +631,38 @@ fn write_atomic(path: &Path, contents: &str) -> Result<()> {
     tmp.as_file()
         .sync_all()
         .map_err(|e| Error::Config(format!("sync {}: {e}", path.display())))?;
-    tmp.persist(path)
-        .map_err(|e| Error::Config(format!("replace {}: {}", path.display(), e.error)))?;
+    persist_replacing(tmp, path)?;
     sync_dir(dir);
     Ok(())
+}
+
+/// Rename `tmp` over `path`, retrying while the failure is only a Windows
+/// sharing conflict (see [`is_transient_sharing_error`]).
+///
+/// Retrying is safe because the caller holds the config directory's lock, so no
+/// other `sn` writer can be racing this name — the contender is always a reader
+/// or a scanner whose handle closes on its own. On Unix the predicate is
+/// constant `false`, so this is exactly one attempt.
+fn persist_replacing(mut tmp: tempfile::NamedTempFile, path: &Path) -> Result<()> {
+    let deadline = Instant::now() + TRANSIENT_IO_BUDGET;
+    let mut backoff = Duration::from_millis(1);
+    loop {
+        match tmp.persist(path) {
+            Ok(_) => return Ok(()),
+            Err(e) => {
+                if !is_transient_sharing_error(&e.error) || Instant::now() >= deadline {
+                    return Err(Error::Config(format!(
+                        "replace {}: {}",
+                        path.display(),
+                        e.error
+                    )));
+                }
+                tmp = e.file;
+            }
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(25));
+    }
 }
 
 /// `fsync` a directory so a rename into it is durable. Best-effort: a
@@ -612,21 +679,47 @@ fn sync_dir(dir: &Path) {
 #[cfg(not(unix))]
 fn sync_dir(_dir: &Path) {}
 
-pub fn load_config_from(path: &std::path::Path) -> Result<Config> {
-    if !path.exists() {
-        return Ok(Config::default());
+/// Read a config file, distinguishing "not there yet" (`Ok(None)`) from every
+/// other failure.
+///
+/// The absence test is the read's own `NotFound`, never a preceding
+/// `path.exists()`. `exists()` answers `false` for *any* error, so an
+/// unreadable file — a bad mode, or on Windows a name momentarily delete-pending
+/// under a concurrent replacement — would read as an empty config, and the
+/// caller's read-modify-write would then persist that emptiness over everyone
+/// else's profiles. A load that cannot see the file must fail loudly.
+///
+/// Readers hold no lock, so a Windows reader is exposed to the same sharing
+/// window as the writer and gets the same bounded retry.
+fn read_config_file(path: &Path) -> Result<Option<String>> {
+    let deadline = Instant::now() + TRANSIENT_IO_BUDGET;
+    let mut backoff = Duration::from_millis(1);
+    loop {
+        match fs::read_to_string(path) {
+            Ok(s) => return Ok(Some(s)),
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
+            Err(e) => {
+                if !is_transient_sharing_error(&e) || Instant::now() >= deadline {
+                    return Err(Error::Config(format!("read {}: {e}", path.display())));
+                }
+            }
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(25));
     }
-    let s = fs::read_to_string(path)
-        .map_err(|e| Error::Config(format!("read {}: {e}", path.display())))?;
+}
+
+pub fn load_config_from(path: &std::path::Path) -> Result<Config> {
+    let Some(s) = read_config_file(path)? else {
+        return Ok(Config::default());
+    };
     toml::from_str(&s).map_err(|e| Error::Config(format!("parse {}: {e}", path.display())))
 }
 
 pub fn load_credentials_from(path: &std::path::Path) -> Result<Credentials> {
-    if !path.exists() {
+    let Some(s) = read_config_file(path)? else {
         return Ok(Credentials::default());
-    }
-    let s = fs::read_to_string(path)
-        .map_err(|e| Error::Config(format!("read {}: {e}", path.display())))?;
+    };
     toml::from_str(&s).map_err(|e| Error::Config(format!("parse {}: {e}", path.display())))
 }
 
@@ -1069,6 +1162,27 @@ mod resolution_tests {
         save_credentials_to(&path, &sample_credentials()).unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn an_unreadable_config_is_an_error_not_an_empty_one() {
+        // A load that cannot read the file must say so. Answering with the
+        // default would be silent data loss: every caller here is a
+        // read-modify-write, so an "empty" config gets written straight back
+        // over every profile on disk.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        save_config_to(&path, &sample_config()).unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o000)).unwrap();
+        if fs::read_to_string(&path).is_ok() {
+            return; // root ignores the mode, so there is nothing to assert
+        }
+        assert!(
+            load_config_from(&path).is_err(),
+            "an unreadable config.toml loaded as an empty one"
+        );
     }
 
     #[test]

@@ -1,7 +1,8 @@
-use crate::cli::table::{build_client, build_profile};
+use crate::cli::table::{build_client, build_profile, take_field};
 use crate::cli::{GlobalFlags, OutputMode};
 use crate::error::{Error, Result};
 use clap::Subcommand;
+use serde_json::Value;
 
 #[derive(Subcommand, Debug)]
 pub enum UserSub {
@@ -23,13 +24,18 @@ pub fn me(global: &GlobalFlags) -> Result<()> {
     let out = if matches!(global.output, OutputMode::Raw) {
         resp
     } else {
-        resp["result"].get(0).cloned().ok_or_else(|| Error::Api {
-            status: 200,
-            message: "no user record returned for current auth identity".into(),
-            detail: None,
-            transaction_id: None,
-            sn_error: None,
-        })?
+        take_field(resp, "result")
+            .and_then(|r| match r {
+                Value::Array(a) => a.into_iter().next(),
+                _ => None,
+            })
+            .ok_or_else(|| Error::Api {
+                status: 200,
+                message: "no user record returned for current auth identity".into(),
+                detail: None,
+                transaction_id: None,
+                sn_error: None,
+            })?
     };
     crate::cli::table::write_response(global, &out)
 }

@@ -1,5 +1,5 @@
 use crate::cli::auth::{complete_oauth_login, whoami};
-use crate::cli::table::{build_client, build_profile, write_response};
+use crate::cli::table::{build_client, build_profile, confirm_delete, write_response};
 use crate::cli::GlobalFlags;
 use crate::config::{
     config_path, credentials_path, default_redirect_uri, load_config_from, load_credentials_from,
@@ -27,6 +27,9 @@ pub enum ProfileSub {
     Remove {
         /// Profile to remove.
         name: String,
+        /// Skip confirmation prompt (required for non-interactive use).
+        #[arg(long, short = 'y')]
+        yes: bool,
     },
     /// Make a profile the default for subsequent commands.
     Use {
@@ -94,7 +97,7 @@ pub fn run(global: &GlobalFlags, sub: ProfileSub) -> Result<()> {
         ProfileSub::Add(args) => add(global, args),
         ProfileSub::List => list(global),
         ProfileSub::Show { name } => show(global, name),
-        ProfileSub::Remove { name } => remove(global, name),
+        ProfileSub::Remove { name, yes } => remove(global, name, yes),
         ProfileSub::Use { name } => set_default(global, name),
     }
 }
@@ -705,7 +708,10 @@ fn show(global: &GlobalFlags, name: Option<String>) -> Result<()> {
 /// Deliberately idempotent — removing a profile that isn't there is not an
 /// error — so the result says what actually happened rather than leaving the
 /// caller to re-read the config to find out.
-fn remove(global: &GlobalFlags, name: String) -> Result<()> {
+fn remove(global: &GlobalFlags, name: String, yes: bool) -> Result<()> {
+    // The one destructive command with no remote copy to re-fetch from: the
+    // password or OAuth tokens in credentials.toml exist nowhere else.
+    confirm_delete(yes, &format!("profile {name} and its stored credentials"))?;
     let cfg_path = config_path()?;
     let cred_path = credentials_path()?;
     let mut cfg = load_config_from(&cfg_path)?;

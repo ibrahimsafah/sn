@@ -6,7 +6,7 @@ use crate::config::{
     AuthMethod, ProfileResolverInputs, ResolvedProfile,
 };
 use crate::error::{Error, Result};
-use crate::output::{emit_value, Format, ResolvedFormat};
+use crate::output::{Format, ResolvedFormat};
 use crate::query::{DeleteQuery, GetQuery, ListQuery, WriteQuery};
 use clap::{Subcommand, ValueEnum};
 use is_terminal::IsTerminal;
@@ -390,10 +390,30 @@ fn format_from_flags(g: &GlobalFlags) -> ResolvedFormat {
     }
 }
 
+/// Unwrap the `{"result": ...}` envelope unless `--output raw` asked to keep it.
+///
+/// Takes `v` by value and moves the subtree out: this runs on every command's
+/// response, and cloning it allocated once per string and map in the tree.
 pub(crate) fn unwrap_or_raw(v: Value, mode: OutputMode) -> Value {
     match mode {
         OutputMode::Raw => v,
-        OutputMode::Default | OutputMode::Table => v.get("result").cloned().unwrap_or(v),
+        OutputMode::Default | OutputMode::Table => match v {
+            Value::Object(mut m) => match m.remove("result") {
+                Some(r) => r,
+                None => Value::Object(m),
+            },
+            other => other,
+        },
+    }
+}
+
+/// Take one key out of a JSON object by value, for the same reason
+/// [`unwrap_or_raw`] moves: the caller owns the response and is about to drop
+/// the rest of it. `None` for a missing key or a non-object.
+pub(crate) fn take_field(v: Value, key: &str) -> Option<Value> {
+    match v {
+        Value::Object(mut m) => m.remove(key),
+        _ => None,
     }
 }
 
@@ -433,8 +453,7 @@ pub(crate) fn write_response(global: &GlobalFlags, value: &Value) -> Result<()> 
     if matches!(global.output, OutputMode::Table) {
         crate::output_table::write_table(value)
     } else {
-        emit_value(io::stdout().lock(), value, format_from_flags(global))
-            .map_err(crate::output::map_stdout_err)
+        crate::output::write_value(value, format_from_flags(global))
     }
 }
 
@@ -544,21 +563,32 @@ fn write_op(
     crate::cli::table::write_response(global, &out)
 }
 
-/// Gate a destructive operation behind a confirmation, shared by every `delete`
-/// command. With `--yes` it is a no-op; otherwise it refuses to proceed on a
-/// non-interactive stdin (exit 1) and, on a TTY, prompts `Delete {what}? [y/N]:`
-/// and aborts unless the answer is affirmative. `what` names the target, e.g.
-/// `incident/abc123`, `attachment abc123`, or `relation r1 on cmdb_ci_server/x`.
-pub(crate) fn confirm_delete(yes: bool, what: &str) -> Result<()> {
+/// Gate a destructive operation behind a confirmation, shared by every command
+/// that removes or undoes instance state. With `--yes` it is a no-op; otherwise
+/// it refuses to proceed on a non-interactive stdin (exit 1) and, on a TTY,
+/// prompts `{Verb} {what}? [y/N]:` and aborts unless the answer is affirmative.
+///
+/// `verb` is a lowercase imperative — `delete`, `empty`, `back out`, `roll back`
+/// — and appears verbatim in the non-TTY refusal, so the message names the
+/// operation the caller actually asked for. It was hardcoded to "delete" until
+/// 0.12.0, which is why the commands that undo rather than delete never got a
+/// gate: the only phrasing on offer was a lie. `what` names the target, e.g.
+/// `incident/abc123` or `relation r1 on cmdb_ci_server/x`.
+pub(crate) fn confirm_destructive(yes: bool, verb: &str, what: &str) -> Result<()> {
     if yes {
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
-        return Err(Error::Usage(
-            "delete requires --yes when stdin is not a terminal".into(),
-        ));
+        return Err(Error::Usage(format!(
+            "{verb} requires --yes when stdin is not a terminal"
+        )));
     }
-    eprint!("Delete {what}? [y/N]: ");
+    let mut chars = verb.chars();
+    let verb = match chars.next() {
+        Some(c) => c.to_uppercase().collect::<String>() + chars.as_str(),
+        None => String::new(),
+    };
+    eprint!("{verb} {what}? [y/N]: ");
     let mut s = String::new();
     std::io::stdin()
         .read_line(&mut s)
@@ -567,6 +597,12 @@ pub(crate) fn confirm_delete(yes: bool, what: &str) -> Result<()> {
         return Err(Error::Usage("aborted".into()));
     }
     Ok(())
+}
+
+/// [`confirm_destructive`] for the `delete` verb — the shape every `delete`
+/// command wants, and the one `attachment`/`cmdb` still call by this name.
+pub(crate) fn confirm_delete(yes: bool, what: &str) -> Result<()> {
+    confirm_destructive(yes, "delete", what)
 }
 
 pub fn delete(global: &GlobalFlags, args: TableDeleteArgs) -> Result<()> {

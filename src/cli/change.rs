@@ -311,7 +311,19 @@ pub enum ChangeConflictSub {
     /// Add a conflict to a change.
     Add(ChangeConflictAddArgs),
     /// Remove conflicts from a change.
-    Remove(ChangeSysIdArg),
+    Remove(ChangeConflictRemoveArgs),
+}
+
+/// `remove` cannot reuse [`ChangeSysIdArg`] like its `get` sibling: that struct
+/// is shared with `nextstates`, `schedule` and `ci list`, and a `--yes` flag on
+/// a read command is noise that reads as if the read were dangerous.
+#[derive(clap::Args, Debug)]
+pub struct ChangeConflictRemoveArgs {
+    /// sys_id of the change request.
+    pub sys_id: String,
+    /// Skip confirmation prompt (required for non-interactive use).
+    #[arg(long, short = 'y')]
+    pub yes: bool,
 }
 
 #[derive(clap::Args, Debug)]
@@ -686,7 +698,13 @@ fn conflict_add(global: &GlobalFlags, args: ChangeConflictAddArgs) -> Result<()>
     crate::cli::table::write_response(global, &out)
 }
 
-fn conflict_remove(global: &GlobalFlags, args: ChangeSysIdArg) -> Result<()> {
+fn conflict_remove(global: &GlobalFlags, args: ChangeConflictRemoveArgs) -> Result<()> {
+    // The endpoint takes no conflict id: this clears every conflict recorded
+    // against the change, which is why it is gated like `change task delete`.
+    confirm_delete(
+        args.yes,
+        &format!("all conflicts on change {}", args.sys_id),
+    )?;
     let profile = build_profile(global)?;
     let client = build_client(&profile, global.timeout)?;
     let path = format!("/api/sn_chg_rest/change/{}/conflict", args.sys_id);

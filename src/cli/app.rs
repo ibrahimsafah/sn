@@ -1,4 +1,4 @@
-use crate::cli::table::{build_client, build_profile, unwrap_or_raw};
+use crate::cli::table::{build_client, build_profile, confirm_destructive, unwrap_or_raw};
 use crate::cli::GlobalFlags;
 use crate::error::{Error, Result};
 use clap::Subcommand;
@@ -71,6 +71,9 @@ pub struct AppRollbackArgs {
     /// Version to roll back to (required).
     #[arg(long, required = true)]
     pub version: String,
+    /// Skip confirmation prompt (required for non-interactive use).
+    #[arg(long, short = 'y')]
+    pub yes: bool,
     /// Block until the operation completes (polls progress API).
     #[arg(long)]
     pub wait: bool,
@@ -143,11 +146,22 @@ pub fn publish(global: &GlobalFlags, args: AppPublishArgs) -> Result<()> {
 }
 
 pub fn rollback(global: &GlobalFlags, args: AppRollbackArgs) -> Result<()> {
-    if args.sys_id.is_none() && args.scope.is_none() {
-        return Err(Error::Usage(
-            "either --sys-id or --scope is required".into(),
-        ));
-    }
+    let target = match (args.sys_id.as_deref(), args.scope.as_deref()) {
+        (Some(id), _) => format!("app {id}"),
+        (None, Some(scope)) => format!("app {scope}"),
+        (None, None) => {
+            return Err(Error::Usage(
+                "either --sys-id or --scope is required".into(),
+            ))
+        }
+    };
+    // Replaces the installed application on the whole instance with an older
+    // build; whatever the newer version wrote is not rolled back with it.
+    confirm_destructive(
+        args.yes,
+        "roll back",
+        &format!("{target} to version {}", args.version),
+    )?;
     let profile = build_profile(global)?;
     let client = build_client(&profile, global.timeout)?;
     let mut query: Vec<(String, String)> = Vec::new();

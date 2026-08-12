@@ -342,7 +342,7 @@ fn profile_remove_emits_a_json_result() {
     );
 
     let out = sn_cmd(tmp.path())
-        .args(["--compact", "profile", "remove", "alpha"])
+        .args(["--compact", "profile", "remove", "alpha", "--yes"])
         .assert()
         .success();
     let v: Value = serde_json::from_str(stdout_of(&out).trim()).unwrap();
@@ -353,7 +353,7 @@ fn profile_remove_emits_a_json_result() {
 
     // Removing what is not there stays a success, and says so.
     let out = sn_cmd(tmp.path())
-        .args(["--compact", "profile", "remove", "alpha"])
+        .args(["--compact", "profile", "remove", "alpha", "--yes"])
         .assert()
         .success();
     let v: Value = serde_json::from_str(stdout_of(&out).trim()).unwrap();

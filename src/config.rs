@@ -1,11 +1,14 @@
 use crate::error::{Error, Result};
 use directories::ProjectDirs;
 use serde::{Deserialize, Serialize};
+use std::cell::RefCell;
 use std::collections::BTreeMap;
-use std::fs;
+use std::fs::{self, File, OpenOptions};
+use std::io::Write;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
+use std::time::{Duration, Instant};
 
 #[derive(Debug, Default, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct Config {
@@ -330,6 +333,208 @@ instance = "dev.example.com"
     }
 }
 
+// ---------------------------------------------------------------------------
+// Persistence: locked read-modify-write + atomic, 0600-from-birth replacement.
+//
+// `sn`'s callers are agents, so N concurrent invocations against one config
+// directory is the normal case rather than the edge. Three properties are load
+// bearing here and none of them come from `fs::write`:
+//
+//   * `credentials.toml` must never exist, even for an instant, at anything but
+//     0600. Write-then-chmod leaves a brand-new file at the umask default with
+//     secrets already in it.
+//   * A crash mid-write must leave the old file, not half of the new one.
+//   * Two processes doing load → modify → save must not silently drop each
+//     other's changes.
+// ---------------------------------------------------------------------------
+
+/// Advisory lockfile serializing writes to one config directory.
+///
+/// It is a **sidecar**, deliberately not `config.toml`/`credentials.toml`
+/// themselves: those are replaced by `rename(2)`, so a lock taken on one of them
+/// is a lock on an inode the next writer will never open — each writer would
+/// hold "the lock" on a different inode and none would block. Only a file that
+/// is created once and never renamed over has a stable identity to lock.
+///
+/// One lock covers the whole directory rather than one per file. The two files
+/// are written as a pair (adding a profile touches both), so per-file locks
+/// would let a reader observe a profile that exists in one and not the other;
+/// a single lock also means there is no lock ordering, and so no deadlock.
+const LOCK_FILE: &str = ".sn.lock";
+
+/// How long a write waits for the lock before giving up. Every critical section
+/// is a parse, a mutation and one small write, so reaching this bound means
+/// another process is wedged — an agent gets a diagnosable error rather than an
+/// invocation that never returns.
+const LOCK_TIMEOUT: Duration = Duration::from_secs(10);
+
+thread_local! {
+    /// Config directories whose lock this thread already holds. `flock(2)` locks
+    /// an open file *description*, so a second `open` + lock from the same
+    /// thread contends with the first: nesting a locked write inside another one
+    /// would deadlock the process against itself. Recording the held directories
+    /// per thread makes that nesting a no-op while leaving contention between
+    /// threads and processes fully intact — each of those opens its own
+    /// description and so blocks as intended.
+    static HELD_LOCKS: RefCell<Vec<PathBuf>> = const { RefCell::new(Vec::new()) };
+}
+
+/// RAII holder for the directory lock. Dropping it closes the file handle,
+/// which is what releases the `flock`.
+struct DirLock {
+    dir: PathBuf,
+    _file: Option<File>,
+}
+
+impl DirLock {
+    fn acquire(dir: &Path) -> Result<Self> {
+        fs::create_dir_all(dir)
+            .map_err(|e| Error::Config(format!("mkdir {}: {e}", dir.display())))?;
+        // Canonicalized (after the mkdir, so it can succeed) because the
+        // re-entrancy record is keyed by path: two spellings of one directory —
+        // `cfg` vs `./cfg`, or either side of a symlink — would otherwise look
+        // like different locks, and the inner acquisition would block on the
+        // outer one's own flock until LOCK_TIMEOUT.
+        let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
+        let held = HELD_LOCKS.with(|h| h.borrow().contains(&dir));
+        let file = if held { None } else { Some(lock_dir(&dir)?) };
+        HELD_LOCKS.with(|h| h.borrow_mut().push(dir.clone()));
+        Ok(DirLock { dir, _file: file })
+    }
+}
+
+impl Drop for DirLock {
+    fn drop(&mut self) {
+        // `try_with` because a guard could outlive TLS teardown at thread exit,
+        // where `with` panics.
+        let _ = HELD_LOCKS.try_with(|h| {
+            let mut h = h.borrow_mut();
+            if let Some(pos) = h.iter().rposition(|d| *d == self.dir) {
+                h.remove(pos);
+            }
+        });
+    }
+}
+
+fn lock_dir(dir: &Path) -> Result<File> {
+    let path = dir.join(LOCK_FILE);
+    let file = OpenOptions::new()
+        .create(true)
+        .read(true)
+        .write(true)
+        .truncate(false)
+        .open(&path)
+        .map_err(|e| Error::Config(format!("open {}: {e}", path.display())))?;
+
+    let deadline = Instant::now() + LOCK_TIMEOUT;
+    let mut backoff = Duration::from_millis(1);
+    loop {
+        // Spelled as a trait call, not `file.try_lock()`: Rust 1.89 stabilized an
+        // inherent `File::try_lock` that would silently shadow this one, and the
+        // crate's MSRV predates it.
+        match fs4::FileExt::try_lock(&file) {
+            Ok(()) => return Ok(file),
+            Err(fs4::TryLockError::WouldBlock) => {}
+            Err(fs4::TryLockError::Error(e)) => {
+                return Err(Error::Config(format!("lock {}: {e}", path.display())))
+            }
+        }
+        if Instant::now() >= deadline {
+            return Err(Error::Config(format!(
+                "timed out after {}s waiting for the config lock at {}; another sn process is holding it",
+                LOCK_TIMEOUT.as_secs(),
+                path.display()
+            )));
+        }
+        std::thread::sleep(backoff);
+        backoff = (backoff * 2).min(Duration::from_millis(25));
+    }
+}
+
+/// The directory whose lock guards `path` — its parent, or the working
+/// directory for a bare filename.
+fn lock_dir_of(path: &Path) -> &Path {
+    match path.parent() {
+        Some(p) if !p.as_os_str().is_empty() => p,
+        _ => Path::new("."),
+    }
+}
+
+/// Run `f` holding the config directory's exclusive advisory lock.
+///
+/// This is the wrapper any load → modify → save sequence needs: the `save_*`
+/// functions lock their own writes, but a lock taken only around the write does
+/// nothing about two processes that each read the old file first. Re-entrant
+/// within a thread, so the inner `save_*` call is free.
+pub fn with_config_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    let dir = config_dir()?;
+    let _guard = DirLock::acquire(&dir)?;
+    f()
+}
+
+/// Read `config.toml`, hand it to `f`, and write it back — all under one lock,
+/// so a concurrent writer cannot land between the read and the write.
+pub fn update_config_at<T>(path: &Path, f: impl FnOnce(&mut Config) -> Result<T>) -> Result<T> {
+    let _guard = DirLock::acquire(lock_dir_of(path))?;
+    let mut config = load_config_from(path)?;
+    let out = f(&mut config)?;
+    save_config_to(path, &config)?;
+    Ok(out)
+}
+
+/// Read `credentials.toml`, hand it to `f`, and write it back under one lock.
+/// See [`update_config_at`].
+pub fn update_credentials_at<T>(
+    path: &Path,
+    f: impl FnOnce(&mut Credentials) -> Result<T>,
+) -> Result<T> {
+    let _guard = DirLock::acquire(lock_dir_of(path))?;
+    let mut creds = load_credentials_from(path)?;
+    let out = f(&mut creds)?;
+    save_credentials_to(path, &creds)?;
+    Ok(out)
+}
+
+/// A temp file in `dir`, created 0600 by `open(2)` itself.
+///
+/// The mode is passed to the open, never applied afterwards: create-then-chmod
+/// is precisely the window this module exists to close.
+fn new_temp_file(dir: &Path) -> Result<tempfile::NamedTempFile> {
+    let mut builder = tempfile::Builder::new();
+    // Leading dot + recognizable stem so anything a hard crash strands here is
+    // identifiable rather than mistaken for a real config file.
+    builder.prefix(".sn-tmp");
+    #[cfg(unix)]
+    builder.permissions(fs::Permissions::from_mode(0o600));
+    builder
+        .tempfile_in(dir)
+        .map_err(|e| Error::Config(format!("create temp file in {}: {e}", dir.display())))
+}
+
+/// Replace `path`'s contents with `contents` in one step.
+///
+/// The bytes land in a temp file **in the same directory** — `rename(2)` is only
+/// atomic within a single filesystem, so a temp file under `/tmp` would be a
+/// copy, not a rename. `sync_all` before the rename is what makes the crash
+/// outcome "the old file or the new file" instead of a rename pointing at blocks
+/// that were never written.
+///
+/// The replacement carries the temp file's 0600 mode onto the destination, which
+/// also repairs a `credentials.toml` left 0644 by an older release.
+fn write_atomic(path: &Path, contents: &str) -> Result<()> {
+    let dir = lock_dir_of(path);
+    fs::create_dir_all(dir).map_err(|e| Error::Config(format!("mkdir {}: {e}", dir.display())))?;
+    let mut tmp = new_temp_file(dir)?;
+    tmp.write_all(contents.as_bytes())
+        .map_err(|e| Error::Config(format!("write {}: {e}", path.display())))?;
+    tmp.as_file()
+        .sync_all()
+        .map_err(|e| Error::Config(format!("sync {}: {e}", path.display())))?;
+    tmp.persist(path)
+        .map_err(|e| Error::Config(format!("replace {}: {}", path.display(), e.error)))?;
+    Ok(())
+}
+
 pub fn load_config_from(path: &std::path::Path) -> Result<Config> {
     if !path.exists() {
         return Ok(Config::default());
@@ -348,34 +553,24 @@ pub fn load_credentials_from(path: &std::path::Path) -> Result<Credentials> {
     toml::from_str(&s).map_err(|e| Error::Config(format!("parse {}: {e}", path.display())))
 }
 
+/// Persist `cfg`. Written 0600 like `credentials.toml`: it names the instances
+/// and OAuth clients one user talks to, and nothing else needs to read it.
 pub fn save_config_to(path: &std::path::Path, cfg: &Config) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| Error::Config(format!("mkdir {}: {e}", parent.display())))?;
-    }
     let s =
         toml::to_string_pretty(cfg).map_err(|e| Error::Config(format!("serialize config: {e}")))?;
-    fs::write(path, s).map_err(|e| Error::Config(format!("write {}: {e}", path.display())))
+    let _guard = DirLock::acquire(lock_dir_of(path))?;
+    write_atomic(path, &s)
 }
 
+/// Persist `cr`. There is no chmod here on purpose — the file is born 0600 in
+/// [`new_temp_file`] and keeps that mode across the rename, so the secrets are
+/// never readable by anyone else, not even for the instant a write-then-chmod
+/// would leave open.
 pub fn save_credentials_to(path: &std::path::Path, cr: &Credentials) -> Result<()> {
-    if let Some(parent) = path.parent() {
-        fs::create_dir_all(parent)
-            .map_err(|e| Error::Config(format!("mkdir {}: {e}", parent.display())))?;
-    }
     let s = toml::to_string_pretty(cr)
         .map_err(|e| Error::Config(format!("serialize credentials: {e}")))?;
-    fs::write(path, s).map_err(|e| Error::Config(format!("write {}: {e}", path.display())))?;
-    #[cfg(unix)]
-    {
-        let mut perms = fs::metadata(path)
-            .map_err(|e| Error::Config(format!("stat {}: {e}", path.display())))?
-            .permissions();
-        perms.set_mode(0o600);
-        fs::set_permissions(path, perms)
-            .map_err(|e| Error::Config(format!("chmod {}: {e}", path.display())))?;
-    }
-    Ok(())
+    let _guard = DirLock::acquire(lock_dir_of(path))?;
+    write_atomic(path, &s)
 }
 
 /// Resolved profile ready to make HTTP calls. Built by applying precedence:
@@ -571,25 +766,29 @@ pub fn resolve_profile(inputs: ProfileResolverInputs<'_>) -> Result<ResolvedProf
 
 /// Persist a refreshed/new OAuth token set for `profile_name` into
 /// `credentials.toml`, leaving every other field untouched.
+///
+/// Locked read-modify-write: parallel invocations of `sn` each refresh their own
+/// profile, and an unlocked last-writer-wins would strand the losers' refresh
+/// tokens at their pre-refresh values — dead, once the instance rotates them.
 pub fn save_oauth_tokens(profile_name: &str, tokens: &TokenSet) -> Result<()> {
-    let path = credentials_path()?;
-    let mut creds = load_credentials_from(&path)?;
-    creds
-        .profiles
-        .entry(profile_name.to_string())
-        .or_default()
-        .oauth_tokens = Some(tokens.clone());
-    save_credentials_to(&path, &creds)
+    update_credentials_at(&credentials_path()?, |creds| {
+        creds
+            .profiles
+            .entry(profile_name.to_string())
+            .or_default()
+            .oauth_tokens = Some(tokens.clone());
+        Ok(())
+    })
 }
 
 /// Drop any cached OAuth tokens for `profile_name` (used by `sn auth logout`).
 pub fn clear_oauth_tokens(profile_name: &str) -> Result<()> {
-    let path = credentials_path()?;
-    let mut creds = load_credentials_from(&path)?;
-    if let Some(p) = creds.profiles.get_mut(profile_name) {
-        p.oauth_tokens = None;
-    }
-    save_credentials_to(&path, &creds)
+    update_credentials_at(&credentials_path()?, |creds| {
+        if let Some(p) = creds.profiles.get_mut(profile_name) {
+            p.oauth_tokens = None;
+        }
+        Ok(())
+    })
 }
 
 #[cfg(test)]
@@ -736,6 +935,109 @@ mod resolution_tests {
         save_credentials_to(&path, &sample_credentials()).unwrap();
         let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
         assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn temp_file_is_born_0600_not_chmodded_later() {
+        // The acceptance test for the permission window: the file the secrets are
+        // actually written into must already be 0600 at open(2), because anything
+        // applied afterwards leaves an interval where a umask-default 0644 file
+        // holds a password. Asserted on the temp file itself, since by the time
+        // credentials.toml exists the rename has already happened.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let tmp = new_temp_file(dir.path()).unwrap();
+        let mode = tmp.as_file().metadata().unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600, "temp file created world/group-readable");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn config_file_is_not_group_or_world_readable() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        save_config_to(&path, &sample_config()).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn rewrite_repairs_a_credentials_file_left_0644() {
+        // Files left by an older release (or by a hand-edit) can be sitting at
+        // 0644. The rename carries the temp file's mode onto the destination, so
+        // the next write must fix them rather than preserve the exposure.
+        use std::os::unix::fs::PermissionsExt;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.toml");
+        fs::write(&path, "").unwrap();
+        fs::set_permissions(&path, fs::Permissions::from_mode(0o644)).unwrap();
+        save_credentials_to(&path, &sample_credentials()).unwrap();
+        let mode = fs::metadata(&path).unwrap().permissions().mode() & 0o777;
+        assert_eq!(mode, 0o600);
+    }
+
+    #[test]
+    fn writes_leave_no_temp_files_behind() {
+        let dir = tempfile::tempdir().unwrap();
+        save_config_to(&dir.path().join("config.toml"), &sample_config()).unwrap();
+        save_credentials_to(&dir.path().join("credentials.toml"), &sample_credentials()).unwrap();
+        let mut names: Vec<String> = fs::read_dir(dir.path())
+            .unwrap()
+            .map(|e| e.unwrap().file_name().to_string_lossy().into_owned())
+            .collect();
+        names.sort();
+        assert_eq!(names, vec![".sn.lock", "config.toml", "credentials.toml"]);
+    }
+
+    #[test]
+    fn nested_locks_on_one_directory_do_not_deadlock() {
+        // `update_credentials_at` calls `save_credentials_to`, which locks too.
+        // Without the per-thread re-entrancy record that inner acquisition would
+        // block on the outer one's flock forever (well, until LOCK_TIMEOUT), and
+        // every token refresh would hang.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("credentials.toml");
+        update_credentials_at(&path, |creds| {
+            creds
+                .profiles
+                .insert("nested".into(), ProfileCredentials::default());
+            Ok(())
+        })
+        .unwrap();
+        assert!(load_credentials_from(&path)
+            .unwrap()
+            .profiles
+            .contains_key("nested"));
+    }
+
+    #[test]
+    fn two_spellings_of_one_directory_are_one_lock() {
+        let dir = tempfile::tempdir().unwrap();
+        let _guard = DirLock::acquire(dir.path()).unwrap();
+        // The same directory reached through a "." component. The re-entrancy
+        // record is path-keyed, so without canonicalization this inner write
+        // would sit on the outer guard's own flock until LOCK_TIMEOUT.
+        let path = dir.path().join(".").join("credentials.toml");
+        save_credentials_to(&path, &sample_credentials()).unwrap();
+        assert!(dir.path().join("credentials.toml").exists());
+    }
+
+    #[test]
+    fn update_helpers_see_and_keep_prior_content() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("config.toml");
+        save_config_to(&path, &sample_config()).unwrap();
+        update_config_at(&path, |cfg| {
+            cfg.default_profile = Some("prod".into());
+            Ok(())
+        })
+        .unwrap();
+        let loaded = load_config_from(&path).unwrap();
+        assert_eq!(loaded.default_profile.as_deref(), Some("prod"));
+        assert!(loaded.profiles.contains_key("dev"));
     }
 
     // -----------------------------------------------------------------------

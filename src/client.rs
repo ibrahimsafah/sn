@@ -449,9 +449,12 @@ impl Client {
     /// Returning a [`Download`] instead of `(Vec<u8>, Option<String>)` is what
     /// keeps peak memory independent of attachment size — the old shape had to
     /// materialize the whole file before the caller could write a byte of it, so
-    /// an attachment larger than RAM was simply not downloadable. The headers
-    /// are resolved here so the caller still has the `Content-Type` *before* it
-    /// commits to a destination.
+    /// an attachment larger than RAM was simply not downloadable.
+    ///
+    /// The *status* is still resolved eagerly, and that split matters: a 404 or
+    /// a 401 must fail before the caller touches the filesystem, so a failed
+    /// download never creates (and then has to clean up) a file at or beside the
+    /// destination.
     pub fn download_file(&self, path: &str) -> Result<Download> {
         let url = self.url(path);
         let req = self.http.request(Method::GET, &url);
@@ -468,16 +471,7 @@ impl Client {
             log_body("<", &text);
             return Err(from_http_text(status, tx, &text));
         }
-        let content_type = resp
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(ToString::to_string);
-        Ok(Download {
-            resp,
-            content_type,
-            written: 0,
-        })
+        Ok(Download { resp, written: 0 })
     }
 }
 
@@ -501,7 +495,6 @@ pub const DOWNLOAD_BUFFER_BYTES: usize = 64 * 1024;
 /// semantics move.
 pub struct Download {
     resp: Response,
-    content_type: Option<String>,
     written: u64,
 }
 
@@ -518,11 +511,6 @@ pub enum DownloadError {
 }
 
 impl Download {
-    /// `Content-Type` of the response, if the instance sent one.
-    pub fn content_type(&self) -> Option<&str> {
-        self.content_type.as_deref()
-    }
-
     /// Bytes handed to the sink so far. Meaningful *after* a failed
     /// [`copy_to`](Self::copy_to): a caller writing to an unrecallable sink
     /// (stdout) needs to say how much truncated output it already emitted.

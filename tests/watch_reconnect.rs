@@ -1,9 +1,11 @@
 //! End-to-end guards for the `sn watch` reconnect marker.
 //!
-//! The marker's own rules — it is emitted once per gap, it does not count
-//! against `--max-events`, it does not reset `--idle-timeout` — are unit-tested
-//! in `sn::cli::watch`, because driving a real AMB drop needs a Bayeux
-//! websocket server and wiremock speaks only HTTP.
+//! The marker's own rules — it lands between the last event before a drop and
+//! the first after it, one per gap however many attempts close it, and it moves
+//! neither `--max-events` nor `--idle-timeout` — are tested in `sn::cli::watch`,
+//! where the supervisor can be driven over a scripted `Link`. Out here it
+//! cannot: producing a real drop needs a Bayeux websocket server, and wiremock
+//! speaks only HTTP.
 //!
 //! What is worth asserting from outside the process is the negative: a watch
 //! that never reached a subscribed channel has no gap to report, so stdout must

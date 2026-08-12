@@ -50,6 +50,26 @@
 //! a consumer cannot tell a quiet table from a lost one, which is the failure
 //! this shape exists to prevent — see [`gap_marker`] for why it is keyed rather
 //! than shaped like an event, and [`Stream`] for why it is not counted as one.
+//!
+//! ## What `--idle-timeout` measures
+//!
+//! Subscribed time, and only subscribed time. The question the flag asks is
+//! "has anything happened for N seconds?", and while the watcher is opening its
+//! first socket or reconnecting after a drop it has no way to know — nothing
+//! could reach it either way. So every interval spent off the channel is
+//! forgiven ([`Stream::resume`]): the clock is started by the first successful
+//! subscribe, not by the process, and an outage is added back rather than
+//! counted. The marker's `downtime_ms` is exactly the interval that was
+//! forgiven.
+//!
+//! The alternative — wall-clock time since the last event — made two silent
+//! wrong answers, both of them exit 0 with a stream that looks merely quiet: an
+//! instance slower to mint a session than the timeout never reached its first
+//! poll, and any outage longer than the timeout (guaranteed once backoff caps
+//! at 60s) made the marker the last line of the stream, so the hole it had just
+//! announced was never covered. What forgiving does *not* do is restart the
+//! clock per session, which would let a socket flapping faster than the timeout
+//! hold a watcher open forever: silence accumulates across sessions.
 
 use crate::amb::{self, Amb, Event};
 use crate::cli::table::{build_client, build_profile, DisplayValueArg};
@@ -340,26 +360,99 @@ fn watch(global: &GlobalFlags, plan: Plan) -> Result<()> {
     // interleave with.
     let mut stream = Stream::new(io::stdout().lock(), plan.limits.max_events);
 
+    // The quirk: AMB authenticates by session cookie, so an ordinary HTTP call
+    // has to mint one before each socket can be opened. It goes out over the
+    // normal client, so Basic and OAuth profiles both just work.
+    let mut connect = || -> Result<Amb> {
+        let cookies = client.session_cookies()?;
+        Amb::connect(&base, &cookies, connect_timeout, &tls)
+    };
+    let mut wait = |d: Duration| sleep_interruptibly(d, &stop, deadline);
+
+    let ctx = Ctx {
+        client: &client,
+        plan: &plan,
+        stop: &stop,
+        deadline,
+        idle,
+    };
+    supervise(&ctx, &mut connect, &mut stream, &mut wait)
+}
+
+/// Everything a session needs that outlives it. Passed as one borrow so the
+/// session functions stay readable as the supervisor grows.
+struct Ctx<'a> {
+    /// Only used to hydrate; the socket has its own authentication (cookies).
+    client: &'a Client,
+    plan: &'a Plan,
+    stop: &'a AtomicBool,
+    deadline: Option<Instant>,
+    idle: Option<Duration>,
+}
+
+/// The subscribe-and-read half of an AMB session, as the supervisor uses it.
+///
+/// A trait rather than the concrete [`Amb`] for one reason: the marker's central
+/// claim — it lands between the last event of a dropped session and the first
+/// event of its replacement — is a property of a *sequence* of sessions, and
+/// producing a real drop needs a Bayeux server (wiremock speaks only HTTP). This
+/// is the seam that lets a test drive drop → resubscribe and read the bytes a
+/// consumer would see.
+trait Link {
+    fn subscribe(&mut self, channel: &str) -> Result<()>;
+    fn poll(&mut self, wait: Duration) -> Result<Vec<Event>>;
+    fn disconnect(&mut self);
+}
+
+impl Link for Amb {
+    fn subscribe(&mut self, channel: &str) -> Result<()> {
+        Amb::subscribe(self, channel)
+    }
+    fn poll(&mut self, wait: Duration) -> Result<Vec<Event>> {
+        Amb::poll(self, wait)
+    }
+    fn disconnect(&mut self) {
+        Amb::disconnect(self);
+    }
+}
+
+/// One session after another, with [`decide`]'s policy in between.
+///
+/// Generic over the link and over how one is opened, so the whole loop —
+/// including what the stream looks like across a drop — can be driven without a
+/// socket. `wait` is the backoff sleep, injected for the same reason.
+fn supervise<W, L, C>(
+    ctx: &Ctx<'_>,
+    connect: &mut C,
+    stream: &mut Stream<W>,
+    wait: &mut dyn FnMut(Duration) -> bool,
+) -> Result<()>
+where
+    W: Write,
+    L: Link,
+    C: FnMut() -> Result<L>,
+{
     let mut attempt: u32 = 0;
     // Retrying is only ever right for a connection that once worked.
     let mut established = false;
-    // Armed only after a drop, so the first session announces nothing.
-    let mut gap: Option<Gap> = None;
+    // Armed only after a drop, so the first session announces nothing. Holds the
+    // ordinal of the reconnect that will close the hole.
+    let mut gap: Option<u32> = None;
+    // Start of the interval the watcher is currently spending *not* subscribed:
+    // before the first successful subscribe, then from each drop until the
+    // resubscribe that ends it. One measurement, two uses — the idle clock
+    // forgives it, and the marker reports it.
+    let mut offline_since = Instant::now();
 
     loop {
         let started = Instant::now();
         let outcome = session(
-            &client,
-            &base,
-            connect_timeout,
-            &tls,
-            &plan,
-            &stop,
-            deadline,
-            idle,
-            &mut stream,
+            ctx,
+            connect,
+            stream,
             &mut established,
             &mut gap,
+            offline_since,
         );
         let ended = Instant::now();
 
@@ -368,25 +461,33 @@ fn watch(global: &GlobalFlags, plan: Plan) -> Result<()> {
             established,
             lifetime: ended - started,
             attempt,
-            stopping: stop.load(Ordering::SeqCst) || past(deadline),
+            stopping: ctx.stop.load(Ordering::SeqCst) || past(ctx.deadline),
         });
         match next {
             Next::Stop => return Ok(()),
             Next::Fail => return outcome,
             Next::Retry {
                 attempt: next_attempt,
-                wait,
+                wait: pause,
             } => {
                 attempt = next_attempt;
                 let e = outcome.expect_err("Next::Retry is only reachable with an error");
                 log_note(&format!(
                     "amb: {e}; reconnecting in {}s (attempt {attempt}/{MAX_RECONNECT_ATTEMPTS})",
-                    wait.as_secs()
+                    pause.as_secs()
                 ));
-                if !sleep_interruptibly(wait, &stop, deadline) {
+                if !wait(pause) {
                     return Ok(());
                 }
-                gap = Some(extend(gap, ended, attempt));
+                // One hole, however many attempts it takes to close. A gap still
+                // pending belongs to an attempt that died before it could
+                // announce anything, so the outage keeps dating from the drop
+                // that opened it; only a session that was actually subscribed
+                // starts a new one.
+                if gap.is_none() {
+                    offline_since = ended;
+                }
+                gap = Some(attempt);
             }
         }
     }
@@ -415,7 +516,10 @@ struct SessionEnd<'a> {
     established: bool,
     /// How long the session that just ended lasted.
     lifetime: Duration,
-    /// Consecutive failed reconnects *before* this one.
+    /// The ordinal of the reconnect that opened the session that just ended: 0
+    /// for the first session, which no reconnect produced. It is where the next
+    /// attempt's ordinal (and so its backoff) counts from — not a tally of
+    /// failures, since the reconnect this names may well have succeeded.
     attempt: u32,
     /// Ctrl-C fired, or the overall `--duration` deadline passed.
     stopping: bool,
@@ -451,31 +555,6 @@ fn decide(end: &SessionEnd<'_>) -> Next {
     Next::Retry {
         attempt,
         wait: backoff(attempt),
-    }
-}
-
-/// A hole in the stream: the interval between one session dropping and its
-/// replacement being subscribed. Outlives a failed attempt, so a gap that takes
-/// several tries to close is still reported as one interval.
-#[derive(Clone, Copy)]
-struct Gap {
-    /// When the session whose loss opened the hole died.
-    since: Instant,
-    /// Which reconnect attempt closed it.
-    attempt: u32,
-}
-
-/// Fold a fresh drop into whatever gap is still waiting to be announced.
-///
-/// One hole, however many attempts it takes to close. A gap still pending here
-/// belongs to an attempt that died before it could announce anything, so its
-/// start time carries forward: the consumer needs the whole outage, not the last
-/// slice of it. `attempt` always takes the newest value — it is the counter the
-/// backoff is on, and the marker reports which try finally worked.
-fn extend(gap: Option<Gap>, dropped_at: Instant, attempt: u32) -> Gap {
-    Gap {
-        since: gap.map_or(dropped_at, |g| g.since),
-        attempt,
     }
 }
 
@@ -515,11 +594,12 @@ struct Stream<W: Write> {
     out: W,
     max_events: Option<u64>,
     emitted: u64,
-    /// When the last *event* went out. Deliberately not reset by a new session:
-    /// an outage is time during which no event arrived, which is precisely what
-    /// `--idle-timeout` asks about. (Before the reconnect marker existed, each
-    /// session restarted this clock, so a connection that flapped faster than
-    /// the timeout could hold a silent watcher open forever.)
+    /// When the last *event* went out — in subscribed time. Not a plain
+    /// timestamp: [`resume`](Stream::resume) pushes it forward by every interval
+    /// the watcher spent off the channel, so `elapsed()` reads how long the
+    /// watcher has been listening to silence rather than how long it has been
+    /// running. A new session does not reset it, so silence accumulates across
+    /// reconnects.
     last_event: Instant,
 }
 
@@ -547,6 +627,24 @@ impl<W: Write> Stream<W> {
         self.write(v)
     }
 
+    /// Forgive an interval the watcher spent *not* subscribed — the first
+    /// connect, or an outage — by pushing the idle clock forward by it.
+    ///
+    /// Nothing could have arrived while there was no channel to arrive on, so
+    /// that time is not idleness. Counting it exited 0 with an empty stream
+    /// whenever connecting outlasted `--idle-timeout`, which reads exactly like
+    /// a quiet table. Forgiving is deliberately weaker than resetting: what is
+    /// returned is only the offline interval, so silence either side of it still
+    /// adds up and a flapping socket cannot hold a silent watcher open.
+    ///
+    /// Clamped to now. `offline` is always a measured interval that ends at the
+    /// call, so it cannot overshoot today — but a clock parked in the future
+    /// would measure the next silence from the wrong end and never expire.
+    fn resume(&mut self, offline: Duration) {
+        let now = Instant::now();
+        self.last_event = self.last_event.checked_add(offline).unwrap_or(now).min(now);
+    }
+
     fn idle_expired(&self, idle: Option<Duration>) -> bool {
         idle.is_some_and(|i| self.last_event.elapsed() >= i)
     }
@@ -560,77 +658,74 @@ impl<W: Write> Stream<W> {
     }
 }
 
-/// One socket lifetime: mint a session, connect, subscribe, pump until a limit
-/// is reached or the connection breaks.
-#[allow(clippy::too_many_arguments)]
-fn session<W: Write>(
-    client: &Client,
-    base: &str,
-    connect_timeout: Duration,
-    tls: &amb::TlsOptions,
-    plan: &Plan,
-    stop: &Arc<AtomicBool>,
-    deadline: Option<Instant>,
-    idle: Option<Duration>,
+/// One socket lifetime: open a link, subscribe, pump until a limit is reached or
+/// the connection breaks.
+///
+/// `offline_since` is when the watcher stopped being subscribed — process start
+/// for the first session, the drop that opened the hole for a replacement.
+fn session<W: Write, L: Link, C: FnMut() -> Result<L>>(
+    ctx: &Ctx<'_>,
+    connect: &mut C,
     stream: &mut Stream<W>,
     established: &mut bool,
-    gap: &mut Option<Gap>,
+    gap: &mut Option<u32>,
+    offline_since: Instant,
 ) -> Result<()> {
-    // The quirk: AMB authenticates by session cookie, so an ordinary HTTP call
-    // has to mint one before the socket can be opened. Goes out over the normal
-    // client, so Basic and OAuth profiles both just work.
-    let cookies = client.session_cookies()?;
-    let mut amb = Amb::connect(base, &cookies, connect_timeout, tls)?;
+    let mut link = connect()?;
 
-    for channel in &plan.channels {
-        amb.subscribe(channel)?;
+    for channel in &ctx.plan.channels {
+        link.subscribe(channel)?;
     }
     // Subscribed: from here on a failure is a blip in something that worked, so
     // it earns a reconnect rather than an immediate error.
     *established = true;
-    log_note(&format!("amb: subscribed to {}", plan.channels.join(", ")));
+    log_note(&format!(
+        "amb: subscribed to {}",
+        ctx.plan.channels.join(", ")
+    ));
+
+    // Everything since `offline_since` was spent connecting, not listening. One
+    // measurement, two uses: the idle clock forgives it, and the marker reports
+    // it, so the two can never disagree about how long the hole was.
+    let offline = offline_since.elapsed();
+    stream.resume(offline);
 
     // Announce the hole only now, and clear it only here. An attempt that dies
     // before this point has closed nothing, so it leaves the gap standing for
     // its successor to report in full — one marker per gap, not one per attempt.
-    if let Some(g) = gap.take() {
-        stream.meta(&gap_marker(g.since.elapsed(), g.attempt))?;
-    }
+    let announced = match gap.take() {
+        Some(attempt) => stream.meta(&gap_marker(offline, attempt)),
+        None => Ok(()),
+    };
 
-    let result = pump(&mut amb, client, plan, stop, deadline, idle, stream);
-    amb.disconnect();
+    // Every post-subscribe exit disconnects, the failed announcement included:
+    // `sn watch … | head -2` closes stdout mid-marker, and returning straight
+    // out of here would abandon a live subscription without /meta/disconnect.
+    let result = announced.and_then(|()| pump(&mut link, ctx, stream));
+    link.disconnect();
     result
 }
 
-#[allow(clippy::too_many_arguments)]
-fn pump<W: Write>(
-    amb: &mut Amb,
-    client: &Client,
-    plan: &Plan,
-    stop: &Arc<AtomicBool>,
-    deadline: Option<Instant>,
-    idle: Option<Duration>,
-    stream: &mut Stream<W>,
-) -> Result<()> {
+fn pump<W: Write, L: Link>(link: &mut L, ctx: &Ctx<'_>, stream: &mut Stream<W>) -> Result<()> {
     loop {
-        if stop.load(Ordering::SeqCst) || past(deadline) {
+        if ctx.stop.load(Ordering::SeqCst) || past(ctx.deadline) {
             return Ok(());
         }
-        if stream.idle_expired(idle) {
+        if stream.idle_expired(ctx.idle) {
             return Ok(());
         }
 
         // An empty batch means the poll simply expired — that is the tick that
         // lets the checks above run.
-        for event in amb.poll(TICK)? {
+        for event in link.poll(TICK)? {
             // Filter first: a discarded event must not cost a hydration call,
             // must not count against --max-events, and must not reset the idle
             // clock — otherwise `--operation insert --idle-timeout 30` would be
             // held open indefinitely by updates the caller said it did not want.
-            if !plan.filter.accepts(&event.data) {
+            if !ctx.plan.filter.accepts(&event.data) {
                 continue;
             }
-            if stream.event(&shape(event, client, plan.hydrate.as_ref()))? {
+            if stream.event(&shape(event, ctx.client, ctx.plan.hydrate.as_ref()))? {
                 return Ok(());
             }
         }
@@ -747,7 +842,7 @@ fn backoff(attempt: u32) -> Duration {
 
 /// Sleep, but stay responsive to Ctrl-C and the overall deadline. Returns false
 /// if the caller should stop instead of continuing to wait.
-fn sleep_interruptibly(total: Duration, stop: &Arc<AtomicBool>, deadline: Option<Instant>) -> bool {
+fn sleep_interruptibly(total: Duration, stop: &AtomicBool, deadline: Option<Instant>) -> bool {
     let until = Instant::now() + total;
     while Instant::now() < until {
         if stop.load(Ordering::SeqCst) || past(deadline) {
@@ -910,28 +1005,8 @@ mod tests {
         assert_eq!(m["sn_watch"], "reconnected");
     }
 
-    #[test]
-    fn a_gap_that_takes_several_attempts_is_still_one_interval() {
-        // Attempt 1 dies before it can subscribe, so it announces nothing. The
-        // downtime attempt 2 reports has to span the whole outage, not just the
-        // part after attempt 1 gave up.
-        let drop = Instant::now();
-        let first = extend(None, drop, 1);
-        let second = extend(Some(first), drop + Duration::from_secs(5), 2);
-        assert_eq!(second.since, drop, "the hole opened once");
-        assert_eq!(
-            second.attempt, 2,
-            "reported as closed by the try that worked"
-        );
-    }
-
-    #[test]
-    fn a_fresh_drop_after_an_announced_gap_starts_a_new_interval() {
-        // `session` clears the gap once it has emitted the marker, so the next
-        // drop must time from itself rather than from the previous outage.
-        let drop = Instant::now();
-        assert_eq!(extend(None, drop, 1).since, drop);
-    }
+    // (One marker per gap, and the interval it spans, are asserted end-to-end
+    // over the supervisor further down — that is where the bookkeeping lives.)
 
     // ── Stream: a meta line is not an event ─────────────────────────────────
 
@@ -964,19 +1039,54 @@ mod tests {
 
     #[test]
     fn a_meta_line_does_not_reset_the_idle_clock() {
-        let idle = Some(Duration::from_millis(5));
+        // Deliberately lopsided thresholds. A wall-clock assertion taken right
+        // after the call it is about is a coin flip on a loaded CI runner, so
+        // each direction gets a wide margin instead — half a second of staleness
+        // against a 250ms timeout, an hour against a fresh event — and the
+        // staleness is set exactly rather than slept for.
+        const STALE: Option<Duration> = Some(Duration::from_millis(250));
+        const FRESH: Option<Duration> = Some(Duration::from_secs(3600));
         let mut s = buffered(None);
-        std::thread::sleep(Duration::from_millis(30));
-        assert!(s.idle_expired(idle), "nothing has arrived");
+        s.last_event -= Duration::from_millis(500);
+        assert!(s.idle_expired(STALE), "nothing has arrived");
 
         s.meta(&gap_marker(Duration::from_secs(4), 1)).unwrap();
         assert!(
-            s.idle_expired(idle),
+            s.idle_expired(STALE),
             "a reconnect notice is not an arrival: --idle-timeout must still fire"
         );
 
         s.event(&update()).unwrap();
-        assert!(!s.idle_expired(idle), "a real event does reset it");
+        assert!(!s.idle_expired(FRESH), "a real event does reset it");
+    }
+
+    #[test]
+    fn an_outage_is_forgiven_rather_than_counted_as_idle() {
+        // Time with no channel open is time nothing *could* have arrived on, so
+        // it is not idleness. Both ends of this are exact: the clock is moved by
+        // a stated duration, not by sleeping.
+        let idle = Some(Duration::from_millis(100));
+        let mut s = buffered(None);
+        s.last_event -= Duration::from_millis(300);
+        assert!(s.idle_expired(idle), "300ms with nothing delivered");
+
+        s.resume(Duration::from_millis(300));
+        assert!(
+            !s.idle_expired(idle),
+            "…but all of it was spent off the socket"
+        );
+    }
+
+    #[test]
+    fn forgiving_more_than_elapsed_parks_the_clock_at_now_not_in_the_future() {
+        // `resume` is only ever handed a measured interval, so this cannot
+        // happen today. It is clamped anyway because the failure is silent and
+        // permanent: `Instant::elapsed` saturates at zero, so a clock in the
+        // future would make --idle-timeout never fire again.
+        let mut s = buffered(None);
+        s.resume(Duration::from_secs(3600));
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(s.idle_expired(Some(Duration::from_millis(5))));
     }
 
     #[test]
@@ -999,8 +1109,10 @@ mod tests {
 
         let out = lines(&s);
         assert_eq!(out.len(), 3, "one line per value: {out:?}");
-        // The acceptance criterion: the marker sits between the pre-drop and
-        // post-drop events, so a consumer can place the hole exactly.
+        // Ordering only: this proves the writer preserves the order it is called
+        // in, not that anything calls it that way. That the *supervisor* puts a
+        // marker between a pre-drop and a post-drop event is asserted below,
+        // over a scripted link.
         assert_eq!(out[0]["operation"], "insert");
         assert_eq!(out[1]["sn_watch"], "reconnected");
         assert_eq!(out[2]["operation"], "update");
@@ -1094,6 +1206,385 @@ mod tests {
                 wait: Duration::from_secs(2)
             }
         );
+    }
+
+    // ── the supervisor, over a scripted link ────────────────────────────────
+    //
+    // What the marker claims is about a *sequence* of sessions: it lands between
+    // the last event a dropped session delivered and the first its replacement
+    // does. Nothing below `supervise` can check that, and a real drop needs a
+    // Bayeux server, so these drive the loop over a `Link` that is scripted
+    // rather than connected.
+
+    use std::cell::RefCell;
+    use std::collections::VecDeque;
+    use std::rc::Rc;
+
+    const CHANNEL: &str = "/rw/default/incident/YWN0aXZlPXRydWU-";
+
+    /// One `poll` worth of scripted behavior.
+    enum Step {
+        /// Deliver these payloads.
+        Deliver(Vec<Value>),
+        /// Nothing arrives for this long — the poll expiring, which is what
+        /// lets the deadline and idle checks run.
+        Quiet(Duration),
+        /// The socket dies. Transport, i.e. the recoverable kind.
+        Drop,
+    }
+
+    /// One session's worth of scripted connect.
+    enum Attempt {
+        /// The socket never opens (a failed session mint or upgrade).
+        ConnectFails,
+        /// The socket opens and subscribes, then plays these steps.
+        Opens(Vec<Step>),
+    }
+
+    /// What the supervisor did to the links it was handed.
+    #[derive(Default)]
+    struct Log {
+        subscribes: Vec<String>,
+        disconnects: usize,
+    }
+
+    struct FakeLink {
+        steps: VecDeque<Step>,
+        log: Rc<RefCell<Log>>,
+    }
+
+    impl Link for FakeLink {
+        fn subscribe(&mut self, channel: &str) -> Result<()> {
+            self.log.borrow_mut().subscribes.push(channel.to_string());
+            Ok(())
+        }
+
+        fn poll(&mut self, _wait: Duration) -> Result<Vec<Event>> {
+            match self.steps.pop_front() {
+                Some(Step::Deliver(payloads)) => Ok(payloads
+                    .into_iter()
+                    .map(|data| Event {
+                        channel: CHANNEL.to_string(),
+                        data,
+                    })
+                    .collect()),
+                Some(Step::Quiet(d)) => {
+                    std::thread::sleep(d);
+                    Ok(Vec::new())
+                }
+                // Running out is a script that never said how the session ends.
+                // Dying is the honest reading and keeps the loop finite.
+                Some(Step::Drop) | None => Err(Error::Transport("amb websocket closed".into())),
+            }
+        }
+
+        fn disconnect(&mut self) {
+            self.log.borrow_mut().disconnects += 1;
+        }
+    }
+
+    /// A supervisor run to drive. `--max-events` is not here: it belongs to the
+    /// `Stream` the caller hands in, which is also where the bytes end up.
+    #[derive(Default)]
+    struct Script {
+        attempts: Vec<Attempt>,
+        idle: Option<Duration>,
+        /// What each backoff wait costs in wall clock. Zero unless a test needs
+        /// an outage longer than its own `--idle-timeout`; nothing else pays.
+        pause: Duration,
+        /// How long the first connect takes — a slow session mint.
+        connect_delay: Duration,
+    }
+
+    /// Drive `supervise` over the script, writing into `stream`.
+    fn play<W: Write>(script: Script, stream: &mut Stream<W>) -> (Result<()>, Rc<RefCell<Log>>) {
+        let log = Rc::new(RefCell::new(Log::default()));
+        let plan = Plan {
+            channels: vec![CHANNEL.to_string()],
+            filter: Filter::default(),
+            hydrate: None,
+            limits: WatchLimits::default(),
+        };
+        let client = unreachable_client();
+        let stop = AtomicBool::new(false);
+        let ctx = Ctx {
+            client: &client,
+            plan: &plan,
+            stop: &stop,
+            deadline: None,
+            idle: script.idle,
+        };
+
+        let mut attempts: VecDeque<Attempt> = script.attempts.into();
+        let connect_delay = script.connect_delay;
+        let mut first = true;
+        let links = Rc::clone(&log);
+        let mut connect = move || -> Result<FakeLink> {
+            if first {
+                std::thread::sleep(connect_delay);
+                first = false;
+            }
+            match attempts.pop_front() {
+                Some(Attempt::Opens(steps)) => Ok(FakeLink {
+                    steps: steps.into(),
+                    log: Rc::clone(&links),
+                }),
+                Some(Attempt::ConnectFails) => {
+                    Err(Error::Transport("amb websocket upgrade: refused".into()))
+                }
+                None => Err(Error::Transport("scripted link exhausted".into())),
+            }
+        };
+        let pause = script.pause;
+        let mut wait = |_: Duration| {
+            std::thread::sleep(pause);
+            true
+        };
+
+        let result = supervise(&ctx, &mut connect, stream, &mut wait);
+        (result, log)
+    }
+
+    #[test]
+    fn the_marker_lands_between_the_last_pre_drop_event_and_the_first_after() {
+        // The acceptance criterion, asserted on the bytes: a stream that
+        // survived a drop says where the hole is, in place.
+        let mut s = buffered(Some(2));
+        let (result, log) = play(
+            Script {
+                attempts: vec![
+                    Attempt::Opens(vec![Step::Deliver(vec![insert()]), Step::Drop]),
+                    Attempt::Opens(vec![Step::Deliver(vec![update()])]),
+                ],
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(
+            result.is_ok(),
+            "a survivable drop is not a failure: {result:?}"
+        );
+
+        let out = lines(&s);
+        assert_eq!(out.len(), 3, "event, marker, event: {out:?}");
+        assert_eq!(out[0]["operation"], "insert");
+        assert_eq!(out[1]["sn_watch"], "reconnected", "the hole is announced");
+        assert_eq!(out[1]["attempt"], 1);
+        assert_eq!(out[2]["operation"], "update");
+        assert_eq!(
+            log.borrow().subscribes.len(),
+            2,
+            "the replacement session resubscribed"
+        );
+    }
+
+    #[test]
+    fn a_clean_run_says_nothing_about_gaps() {
+        // The marker is evidence of loss; on a stream that never lost anything
+        // it would be a lie, and a consumer reconciling against the table would
+        // do it for nothing.
+        let mut s = buffered(Some(1));
+        let (result, _) = play(
+            Script {
+                attempts: vec![Attempt::Opens(vec![Step::Deliver(vec![insert()])])],
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        let out = lines(&s);
+        assert_eq!(out.len(), 1, "{out:?}");
+        assert!(out[0].get("sn_watch").is_none(), "{out:?}");
+    }
+
+    #[test]
+    fn one_marker_per_gap_however_many_attempts_it_takes_to_close() {
+        // Attempts 1 and 2 die before subscribing, so they announce nothing —
+        // and the downtime attempt 3 reports has to span the whole outage, not
+        // just the slice after the last failure.
+        let pause = Duration::from_millis(40);
+        let mut s = buffered(Some(2));
+        let (result, _) = play(
+            Script {
+                attempts: vec![
+                    Attempt::Opens(vec![Step::Deliver(vec![insert()]), Step::Drop]),
+                    Attempt::ConnectFails,
+                    Attempt::ConnectFails,
+                    Attempt::Opens(vec![Step::Deliver(vec![update()])]),
+                ],
+                pause,
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(result.is_ok(), "{result:?}");
+
+        let out = lines(&s);
+        let markers: Vec<&Value> = out.iter().filter(|v| v.get("sn_watch").is_some()).collect();
+        assert_eq!(markers.len(), 1, "one hole, one marker: {out:?}");
+        assert_eq!(
+            markers[0]["attempt"], 3,
+            "reported as closed by the try that worked"
+        );
+        // Three waits of `pause` separate the drop from the resubscribe; timing
+        // out the last one alone would report a third of the hole.
+        let reported = markers[0]["downtime_ms"].as_u64().expect("a number");
+        let whole = 3 * u64::try_from(pause.as_millis()).unwrap();
+        assert!(
+            reported >= whole * 3 / 4,
+            "downtime must span the outage, not its last slice: {reported}ms of ~{whole}ms"
+        );
+    }
+
+    #[test]
+    fn a_broken_pipe_on_the_marker_still_closes_the_subscription() {
+        // `sn watch … | head -1`: stdout goes away while the marker is being
+        // written. Every other post-subscribe exit sends /meta/disconnect, and
+        // this one must too — otherwise the instance keeps pushing events into a
+        // subscription nobody will ever read.
+        let mut s = Stream::new(ClosesAfter { lines: 1 }, Some(3));
+        let (result, log) = play(
+            Script {
+                attempts: vec![
+                    Attempt::Opens(vec![Step::Deliver(vec![insert()]), Step::Drop]),
+                    Attempt::Opens(vec![Step::Deliver(vec![update()])]),
+                ],
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(
+            matches!(result, Err(Error::BrokenPipe)),
+            "a closed stdout is a silent exit, not a crash: {result:?}"
+        );
+        assert_eq!(
+            log.borrow().disconnects,
+            2,
+            "the session that could not announce its gap is still closed"
+        );
+    }
+
+    /// A stdout that goes away after `lines` complete lines — `… | head -N`.
+    /// Counted on flushes, because one line is several `write` calls.
+    struct ClosesAfter {
+        lines: usize,
+    }
+
+    impl Write for ClosesAfter {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            if self.lines == 0 {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "stdout closed"));
+            }
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            if self.lines == 0 {
+                return Err(io::Error::new(io::ErrorKind::BrokenPipe, "stdout closed"));
+            }
+            self.lines -= 1;
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn a_slow_first_connect_is_not_idleness() {
+        // Nothing can arrive before there is a channel to arrive on. Counting
+        // the session mint and handshake against --idle-timeout made a watcher
+        // on a slow instance subscribe and then immediately exit 0 with an empty
+        // stream — indistinguishable from a table where nothing happened.
+        let mut s = buffered(Some(1));
+        let (result, _) = play(
+            Script {
+                attempts: vec![Attempt::Opens(vec![Step::Deliver(vec![insert()])])],
+                idle: Some(Duration::from_millis(100)),
+                connect_delay: Duration::from_millis(250),
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(
+            lines(&s).len(),
+            1,
+            "the event it was subscribed for, not an empty stream"
+        );
+    }
+
+    #[test]
+    fn an_outage_does_not_make_the_marker_the_last_line() {
+        // The idle clock used to run through the outage, so any --idle-timeout
+        // shorter than the backoff (guaranteed once backoff caps at 60s) turned
+        // "we reconnected" into "…and then gave up", never covering the hole it
+        // had just announced.
+        let mut s = buffered(Some(2));
+        let (result, _) = play(
+            Script {
+                attempts: vec![
+                    Attempt::Opens(vec![Step::Deliver(vec![insert()]), Step::Drop]),
+                    Attempt::Opens(vec![Step::Deliver(vec![update()])]),
+                ],
+                idle: Some(Duration::from_millis(100)),
+                pause: Duration::from_millis(250),
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        let out = lines(&s);
+        assert_eq!(
+            out.len(),
+            3,
+            "a marker must not be the last thing a watcher says: {out:?}"
+        );
+        assert_eq!(out[2]["operation"], "update");
+    }
+
+    #[test]
+    fn silence_accumulates_across_sessions_so_flapping_cannot_hold_a_watcher_open() {
+        // Forgiving an outage must be weaker than restarting the clock: a socket
+        // that drops faster than --idle-timeout would otherwise keep a watcher
+        // that has delivered nothing alive forever. 20ms of silence either side
+        // of a drop is 40ms of silence, and the timeout is 30ms — so the second
+        // session must expire on its first quiet poll and never reach the event
+        // scripted behind it.
+        let mut s = buffered(None);
+        let (result, log) = play(
+            Script {
+                attempts: vec![
+                    Attempt::Opens(vec![Step::Quiet(Duration::from_millis(20)), Step::Drop]),
+                    Attempt::Opens(vec![
+                        Step::Quiet(Duration::from_millis(20)),
+                        Step::Deliver(vec![update()]),
+                    ]),
+                ],
+                idle: Some(Duration::from_millis(30)),
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        assert_eq!(log.borrow().subscribes.len(), 2, "it did reconnect");
+        let out = lines(&s);
+        assert_eq!(out.len(), 1, "the marker, and nothing after it: {out:?}");
+        assert_eq!(out[0]["sn_watch"], "reconnected");
+    }
+
+    #[test]
+    fn silence_while_subscribed_still_expires_the_idle_clock() {
+        let mut s = buffered(None);
+        let (result, _) = play(
+            Script {
+                attempts: vec![Attempt::Opens(vec![
+                    Step::Quiet(Duration::from_millis(60)),
+                    Step::Deliver(vec![update()]),
+                ])],
+                idle: Some(Duration::from_millis(30)),
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(result.is_ok(), "an idle stop is a clean exit: {result:?}");
+        assert!(lines(&s).is_empty(), "nothing arrived in time");
     }
 
     #[test]

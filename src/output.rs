@@ -5,10 +5,13 @@
 //! through [`write_value`], which coalesces the write into 64 KiB blocks.
 //!
 //! **Stream** — records produced over time by a paginator or a websocket, with a
-//! reader on the far end of a pipe. Those go through [`emit_jsonl`] /
-//! [`write_jsonl_line`], which flush after **every** record: a consumer cannot
+//! reader on the far end of a pipe. Those go through [`write_jsonl_line`], one
+//! call per record, which flushes after **every** record: a consumer cannot
 //! distinguish a line sitting in our buffer from a process that has hung, so
 //! buffering a stream turns `sn watch | jq` into something that looks frozen.
+//! There is deliberately no whole-iterator JSONL helper — one existed, nothing
+//! ever called it, and its tests read like coverage of the streaming path while
+//! pinning a function that was dead in the binary.
 //!
 //! The split lives in the functions rather than in a comment at the call sites,
 //! because the call sites are where it was previously getting lost.
@@ -62,22 +65,6 @@ pub fn emit_value<W: Write>(mut w: W, value: &Value, fmt: ResolvedFormat) -> io:
         ResolvedFormat::Compact => serde_json::to_writer(&mut w, value)?,
     }
     w.write_all(b"\n")
-}
-
-/// Emit a stream of JSON values as JSONL (one compact record per line, regardless of TTY).
-///
-/// Flushes after every record — see the module docs. The iterator may be live
-/// (a paginator following `Link` headers, a websocket), so a record held back
-/// is indistinguishable from a stalled command. A caller that already has the
-/// whole result set in memory should build one `Value::Array` and hand it to
-/// [`write_value`], which batches instead.
-pub fn emit_jsonl<W: Write, I: IntoIterator<Item = Value>>(mut w: W, iter: I) -> io::Result<()> {
-    for v in iter {
-        serde_json::to_writer(&mut w, &v)?;
-        w.write_all(b"\n")?;
-        w.flush()?;
-    }
-    Ok(())
 }
 
 /// Emit an error to stderr as the documented JSON envelope.
@@ -193,13 +180,20 @@ mod tests {
     #[test]
     fn jsonl_one_record_per_line() {
         let mut buf = Vec::new();
-        emit_jsonl(&mut buf, vec![json!({"a": 1}), json!({"a": 2})]).unwrap();
+        for v in [json!({"a": 1}), json!({"a": 2})] {
+            write_jsonl_line(&mut buf, &v).unwrap();
+        }
         assert_eq!(String::from_utf8(buf).unwrap(), "{\"a\":1}\n{\"a\":2}\n");
     }
 
     /// The stream contract: a record has reached the reader before the iterator
     /// is asked for the next one. If JSONL were ever wrapped in a `BufWriter`,
     /// nothing would be visible until 64 KiB accumulated and this fails.
+    ///
+    /// The loop is the shape of the real streaming call sites — `cli::table`'s
+    /// `--all` and `cli::watch`'s event loop both call [`write_jsonl_line`]
+    /// once per record off a live producer — so this exercises the code the
+    /// binary actually runs.
     #[test]
     fn jsonl_records_are_visible_before_the_next_is_produced() {
         let pipe = Rc::new(RefCell::new(Pipe::default()));
@@ -217,7 +211,10 @@ mod tests {
             produced += 1;
             Some(json!({ "i": produced }))
         });
-        emit_jsonl(SpyWriter(Rc::clone(&pipe)), it).unwrap();
+        let mut w = SpyWriter(Rc::clone(&pipe));
+        for v in it {
+            write_jsonl_line(&mut w, &v).unwrap();
+        }
         assert_eq!(visible(&pipe).lines().count(), 3);
     }
 

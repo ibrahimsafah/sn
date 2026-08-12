@@ -182,6 +182,37 @@ fn table_list_all_rejects_output_table() {
     assert!(msg.contains("--array"), "message was: {msg}");
 }
 
+/// "Before any request goes out" has to hold for an OAuth profile too, and that
+/// is the case the basic-profile test above cannot see: `build_client` mints a
+/// token, so a guard sitting below it makes an unreachable instance or an IdP
+/// outage answer a pure argv mistake with a transport error (exit 3) and never
+/// prints the exit-1 usage error naming `--array`.
+///
+/// The profile's cached token is already expired and the token endpoint is a
+/// closed port, so any refresh attempt is a guaranteed, immediate exit 3.
+#[test]
+fn table_list_all_rejects_output_table_before_minting_an_oauth_token() {
+    let expired = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64
+        - 60;
+    let tmp = common::write_oauth_profile("oauth", "http://127.0.0.1:1", "cid", expired);
+    let out = sn_cmd(tmp.path())
+        .args(["--output", "table", "table", "list", "incident", "--all"])
+        .assert()
+        .code(1);
+    let msg = stderr_envelope(&out)["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(msg.contains("--array"), "message was: {msg}");
+    assert!(
+        !msg.contains("oauth_token.do"),
+        "the guard ran after the token round-trip: {msg}"
+    );
+}
+
 #[test]
 fn table_list_all_rejects_output_raw() {
     let tmp = profile_dir("http://127.0.0.1:1");

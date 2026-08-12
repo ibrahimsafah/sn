@@ -1,7 +1,5 @@
 use crate::body::{build_body, BodyInput};
-use crate::cli::table::{
-    build_client, build_profile, confirm_delete, confirm_destructive, unwrap_or_raw,
-};
+use crate::cli::table::{build_client, build_profile, confirm_destructive, unwrap_or_raw};
 use crate::cli::GlobalFlags;
 use crate::error::Result;
 use clap::Subcommand;
@@ -298,7 +296,11 @@ pub fn cart_update(global: &GlobalFlags, args: CatalogCartUpdateArgs) -> Result<
 }
 
 pub fn cart_remove(global: &GlobalFlags, args: CatalogCartItemArgs) -> Result<()> {
-    confirm_delete(args.yes, &format!("cart item {}", args.cart_item_id))?;
+    confirm_destructive(
+        args.yes,
+        "remove",
+        &format!("cart item {}", args.cart_item_id),
+    )?;
     let profile = build_profile(global)?;
     let client = build_client(&profile, global.timeout)?;
     let path = format!("{BASE}/cart/{}", args.cart_item_id);

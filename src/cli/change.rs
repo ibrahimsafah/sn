@@ -1,5 +1,7 @@
 use crate::body::{build_body, BodyInput};
-use crate::cli::table::{build_client, build_profile, confirm_delete, unwrap_or_raw};
+use crate::cli::table::{
+    build_client, build_profile, confirm_delete, confirm_destructive, unwrap_or_raw,
+};
 use crate::cli::{DisplayValueArg, GlobalFlags, ADVANCED};
 use crate::error::{Error, Result};
 use clap::{Subcommand, ValueEnum};
@@ -701,8 +703,11 @@ fn conflict_add(global: &GlobalFlags, args: ChangeConflictAddArgs) -> Result<()>
 fn conflict_remove(global: &GlobalFlags, args: ChangeConflictRemoveArgs) -> Result<()> {
     // The endpoint takes no conflict id: this clears every conflict recorded
     // against the change, which is why it is gated like `change task delete`.
-    confirm_delete(
+    // The verb is the command's own — this is `conflict remove`, and a refusal
+    // saying "delete" names an operation the caller never typed.
+    confirm_destructive(
         args.yes,
+        "remove",
         &format!("all conflicts on change {}", args.sys_id),
     )?;
     let profile = build_profile(global)?;

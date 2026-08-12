@@ -252,12 +252,21 @@ pub struct TableDeleteArgs {
 }
 
 pub fn list(global: &GlobalFlags, args: TableListArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
-
     let paginate = args.all;
     let array = args.array;
     let max_records = args.max_records;
+
+    // Before `build_profile`/`build_client`, because this reads nothing but
+    // argv and must not be preempted by them. `build_client` mints an OAuth
+    // token, so a guard placed after it turns an unreachable instance or an
+    // IdP outage into exit 3 for what is a fixable typo in the caller's own
+    // command line — the usage error (exit 1) never gets a chance to print.
+    if paginate {
+        reject_unstreamable_output(global.output, array)?;
+    }
+
+    let profile = build_profile(global)?;
+    let client = build_client(&profile, global.timeout)?;
 
     let q = ListQuery {
         query: args.query,
@@ -275,8 +284,6 @@ pub fn list(global: &GlobalFlags, args: TableListArgs) -> Result<()> {
     let path = format!("/api/now/table/{}", args.table);
 
     if paginate {
-        reject_unstreamable_output(global.output, array)?;
-
         let cap = if max_records == 0 {
             None
         } else {
@@ -568,19 +575,27 @@ fn write_op(
 /// it refuses to proceed on a non-interactive stdin (exit 1) and, on a TTY,
 /// prompts `{Verb} {what}? [y/N]:` and aborts unless the answer is affirmative.
 ///
-/// `verb` is a lowercase imperative — `delete`, `empty`, `back out`, `roll back`
-/// — and appears verbatim in the non-TTY refusal, so the message names the
-/// operation the caller actually asked for. It was hardcoded to "delete" until
-/// 0.12.0, which is why the commands that undo rather than delete never got a
-/// gate: the only phrasing on offer was a lie. `what` names the target, e.g.
-/// `incident/abc123` or `relation r1 on cmdb_ci_server/x`.
+/// `verb` is a lowercase imperative — `delete`, `remove`, `empty`, `back out`,
+/// `roll back` — and appears verbatim in the non-TTY refusal, so the message
+/// names the operation the caller actually asked for. It was hardcoded to
+/// "delete" until 0.12.0, which is why the commands that undo rather than
+/// delete never got a gate: the only phrasing on offer was a lie. Match it to
+/// the command's own name (`sn catalog cart-remove` refuses with "remove", not
+/// "delete"), or a caller grepping stderr for the operation they ran finds a
+/// word that appears nowhere in their argv.
+///
+/// `what` names the target — `incident/abc123`, `relation r1 on
+/// cmdb_ci_server/x`, `profile prod and its stored credentials` — and is part
+/// of the refusal too, not just the prompt: the non-TTY path is the one a
+/// script reads, and "requires --yes" alone says which flag to add but not what
+/// it would have been added to.
 pub(crate) fn confirm_destructive(yes: bool, verb: &str, what: &str) -> Result<()> {
     if yes {
         return Ok(());
     }
     if !std::io::stdin().is_terminal() {
         return Err(Error::Usage(format!(
-            "{verb} requires --yes when stdin is not a terminal"
+            "{verb} {what} requires --yes when stdin is not a terminal"
         )));
     }
     let mut chars = verb.chars();

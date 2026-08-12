@@ -35,10 +35,17 @@ fn one_profile(instance: &str) -> tempfile::TempDir {
 }
 
 /// Every guarded command must refuse a non-TTY stdin without `--yes`: exit 1
-/// and a usage envelope naming both the `--yes` requirement and the operation
-/// it is refusing, before any network call. The instance points at a closed
-/// port, so a guard that ran too late would surface as a transport error.
-fn assert_guarded(args: &[&str], verb: &str) {
+/// and a usage envelope naming the `--yes` requirement, the operation it is
+/// refusing, *and the target it would have hit*, before any network call. The
+/// instance points at a closed port, so a guard that ran too late would surface
+/// as a transport error.
+///
+/// `verb` is asserted verbatim because it has to match the command the caller
+/// typed: `cart-remove` refusing with "delete" sends someone grepping stderr
+/// for a word that is nowhere in their argv. `what` is asserted for the same
+/// reason a script needs it — "remove requires --yes" does not say *which*
+/// profile was about to go.
+fn assert_guarded(args: &[&str], verb: &str, what: &str) {
     let tmp = one_profile("http://127.0.0.1:1");
     let mut cmd = sn_cmd(tmp.path());
     let out = cmd.args(args).assert().code(1);
@@ -46,7 +53,7 @@ fn assert_guarded(args: &[&str], verb: &str) {
     let msg = v["error"]["message"].as_str().unwrap();
     assert_eq!(
         msg,
-        format!("{verb} requires --yes when stdin is not a terminal"),
+        format!("{verb} {what} requires --yes when stdin is not a terminal"),
         "unexpected message for {args:?}"
     );
     drop(tmp);
@@ -54,17 +61,25 @@ fn assert_guarded(args: &[&str], verb: &str) {
 
 #[test]
 fn change_delete_without_yes_is_guarded() {
-    assert_guarded(&["change", "delete", "chg001"], "delete");
+    assert_guarded(&["change", "delete", "chg001"], "delete", "change chg001");
 }
 
 #[test]
 fn change_task_delete_without_yes_is_guarded() {
-    assert_guarded(&["change", "task", "delete", "chg001", "task001"], "delete");
+    assert_guarded(
+        &["change", "task", "delete", "chg001", "task001"],
+        "delete",
+        "task task001 on change chg001",
+    );
 }
 
 #[test]
 fn attachment_delete_without_yes_is_guarded() {
-    assert_guarded(&["attachment", "delete", "att001"], "delete");
+    assert_guarded(
+        &["attachment", "delete", "att001"],
+        "delete",
+        "attachment att001",
+    );
 }
 
 #[test]
@@ -79,27 +94,49 @@ fn cmdb_relation_delete_without_yes_is_guarded() {
             "rel001",
         ],
         "delete",
+        "relation rel001 on cmdb_ci_server/ci001",
+    );
+}
+
+/// The command is `cart-remove`, so the refusal says "remove".
+#[test]
+fn catalog_cart_remove_without_yes_is_guarded() {
+    assert_guarded(
+        &["catalog", "cart-remove", "item001"],
+        "remove",
+        "cart item item001",
     );
 }
 
 #[test]
-fn catalog_cart_remove_without_yes_is_guarded() {
-    assert_guarded(&["catalog", "cart-remove", "item001"], "delete");
-}
-
-#[test]
 fn catalog_cart_empty_without_yes_is_guarded() {
-    assert_guarded(&["catalog", "cart-empty", "cart001"], "empty");
+    assert_guarded(
+        &["catalog", "cart-empty", "cart001"],
+        "empty",
+        "cart cart001",
+    );
 }
 
+/// Likewise `conflict remove` — and the target is "all conflicts", which is the
+/// part of this operation worth reading twice.
 #[test]
 fn change_conflict_remove_without_yes_is_guarded() {
-    assert_guarded(&["change", "conflict", "remove", "chg001"], "delete");
+    assert_guarded(
+        &["change", "conflict", "remove", "chg001"],
+        "remove",
+        "all conflicts on change chg001",
+    );
 }
 
+/// The one destructive command with nothing to re-fetch from, so the refusal
+/// must name the profile it was about to take the credentials of.
 #[test]
 fn profile_remove_without_yes_is_guarded() {
-    assert_guarded(&["profile", "remove", "test"], "delete");
+    assert_guarded(
+        &["profile", "remove", "test"],
+        "remove",
+        "profile test and its stored credentials",
+    );
 }
 
 #[test]
@@ -107,6 +144,7 @@ fn updateset_back_out_without_yes_is_guarded() {
     assert_guarded(
         &["updateset", "back-out", "--update-set-id", "us001"],
         "back out",
+        "update set us001",
     );
 }
 
@@ -122,6 +160,7 @@ fn app_rollback_without_yes_is_guarded() {
             "1.0",
         ],
         "roll back",
+        "app x_acme_app to version 1.0",
     );
 }
 

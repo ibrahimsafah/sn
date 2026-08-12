@@ -49,16 +49,21 @@ fn seed(server_uri: &str) -> TempDir {
     )
 }
 
-/// Mount the standard `sn ping` mock — `GET /api/now/table/sys_user` with the
-/// given basic-auth pair — expecting exactly `n_calls`. Ping's best-effort
-/// `sys_properties` lookup 404s harmlessly against wiremock and is ignored.
+/// Mount the standard `sn ping` mock — ping's primary probe, with the given
+/// basic-auth pair — expecting exactly `n_calls`. Matching on `basic_auth` is
+/// the whole point: a mismatch 404s, ping's fallback chain then also 404s, and
+/// the `expect` count fails. Ping's best-effort `sys_properties` lookup 404s
+/// harmlessly against wiremock and is ignored.
 async fn mount_auth_mock(server: &MockServer, user: &str, pass: &str, n_calls: u64) {
     Mock::given(method("GET"))
-        .and(path_matcher("/api/now/table/sys_user"))
+        .and(path_matcher("/api/now/sg/impersonation/session"))
         .and(basic_auth(user, pass))
-        .respond_with(
-            ResponseTemplate::new(200).set_body_json(json!({"result": [{"user_name": "ok"}]})),
-        )
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "CurrentUser": "ok",
+            "OriginalUser": "ok",
+            "admin": false,
+            "CanImpersonate": false,
+        })))
         .expect(n_calls)
         .mount(server)
         .await;

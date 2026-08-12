@@ -7,8 +7,9 @@ use crate::config::{
 };
 use crate::error::{Error, Result};
 use crate::oauth;
+use crate::observability::log_note;
 use clap::Subcommand;
-use serde_json::json;
+use serde_json::{json, Value};
 
 #[derive(Subcommand, Debug)]
 pub enum AuthSub {
@@ -93,18 +94,103 @@ pub(crate) fn complete_oauth_login(
     Ok((profile, user))
 }
 
+/// Undocumented, and the instance's own answer to "who is this request from" —
+/// it names the caller directly instead of asking a table to filter itself down
+/// to them. Present on current releases; absent (404) on old ones, which is what
+/// the `sys_user` fallback below is for.
+pub(crate) const CURRENT_USER_PATH: &str = "/api/now/ui/user/current_user";
+
+/// Value of [`Identity::source`] when the answer came from [`CURRENT_USER_PATH`].
+pub(crate) const SOURCE_CURRENT_USER: &str = "ui/user/current_user";
+/// Value of [`Identity::source`] when the answer came from the `sys_user` fallback.
+pub(crate) const SOURCE_SYS_USER: &str = "sys_user";
+
+/// Who the instance says the caller is. `source` records which endpoint said so,
+/// because the two are not equally trustworthy and a caller auditing an identity
+/// needs to know which one answered.
+#[derive(Debug, Clone)]
+pub(crate) struct Identity {
+    pub user_name: String,
+    pub sys_id: Option<String>,
+    pub display_name: Option<String>,
+    pub source: &'static str,
+}
+
 /// Ask the instance who the current credentials actually authenticate as, and
 /// in doing so prove that they authenticate at all.
 ///
-/// The identity has to come from `gs.getUserName()` server-side, the way
-/// `sn user me` does it: a bare `sysparm_limit=1` read of `sys_user` returns
-/// whichever row happens to sort first, which is some arbitrary account and not
-/// the caller. Reporting that as "the user you just authenticated as" is worse
-/// than reporting nothing.
+/// Primary source is [`CURRENT_USER_PATH`], which names the caller server-side
+/// with no query to misparse and no `sys_user` read ACL to satisfy. The
+/// `gs.getUserName()` table read stays on as the fallback because that endpoint
+/// is undocumented, so the fallback is load-bearing rather than decorative.
 ///
-/// A successful read with no row back is not an error — the credentials worked,
-/// the instance just didn't name them — so the user is optional.
+/// A successful read with no user back is not an error — the credentials worked,
+/// the instance just didn't name them — so the identity is optional. What is
+/// never acceptable is naming the *wrong* user: every path here either produces
+/// an identity it can defend or produces `None`.
+pub(crate) fn identify(client: &Client) -> Result<Option<Identity>> {
+    match client.get(CURRENT_USER_PATH, &[]) {
+        Ok(v) => match parse_current_user(&v) {
+            Some(id) => Ok(Some(id)),
+            // 200 with a body that doesn't name a user means this is not the
+            // endpoint we think it is (a proxy's JSON, a stub, a future shape
+            // change). Not a reason to invent a name — hand off to the fallback.
+            None => {
+                log_note("current_user did not name a user; falling back to sys_user");
+                identify_via_sys_user(client)
+            }
+        },
+        // Only a *missing* endpoint earns the fallback. 401/403 is a real auth
+        // verdict and must stay exit 4; a 5xx is an instance fault and a second
+        // endpoint is no more likely to be honest about identity than the first.
+        // A 200 carrying HTML (a session redirect) surfaces as a transport-level
+        // parse error and also propagates: the fallback would be redirected the
+        // same way, so retrying it would only turn one clear failure into two.
+        Err(Error::Api { status: 404, .. }) => identify_via_sys_user(client),
+        Err(e) => Err(e),
+    }
+}
+
+/// Back-compat wrapper: the authenticated user's name, or `None` when the
+/// instance authenticated the credentials without naming anyone.
 pub(crate) fn whoami(client: &Client) -> Result<Option<String>> {
+    Ok(identify(client)?.map(|i| i.user_name))
+}
+
+fn parse_current_user(v: &Value) -> Option<Identity> {
+    let r = v.get("result")?;
+    Some(Identity {
+        user_name: non_empty(r.get("user_name"))?,
+        sys_id: non_empty(r.get("user_sys_id")),
+        display_name: non_empty(r.get("user_display_name")),
+        source: SOURCE_CURRENT_USER,
+    })
+}
+
+fn non_empty(v: Option<&Value>) -> Option<String> {
+    match v.and_then(Value::as_str).map(str::trim) {
+        Some(s) if !s.is_empty() => Some(s.to_string()),
+        _ => None,
+    }
+}
+
+/// Fallback identity read: `sys_user` filtered by a server-side
+/// `gs.getUserName()` scripted query.
+///
+/// The trap this has to survive is that the filter can vanish. A bare
+/// `sysparm_limit=1` read of `sys_user` returns whichever row happens to sort
+/// first — an arbitrary account, not the caller — and ServiceNow **silently
+/// drops** a query term it cannot evaluate (an instance with scripted-query
+/// evaluation disabled, a term that fails to parse). The request still returns
+/// 200 with rows, so the failure is indistinguishable from success by status
+/// alone, and it fails *open*: a plausible wrong name.
+///
+/// Hence `sysparm_limit=2` rather than 1. `user_name` is unique, so an evaluated
+/// filter can match at most one row; a second row proves the term was dropped
+/// and the rows are arbitrary. That case reports nothing rather than a name.
+/// (An instance holding exactly one user total would defeat the check — no real
+/// instance does; `admin`, `guest` and the system accounts ship with it.)
+fn identify_via_sys_user(client: &Client) -> Result<Option<Identity>> {
     let v = client.get(
         "/api/now/table/sys_user",
         &[
@@ -112,15 +198,30 @@ pub(crate) fn whoami(client: &Client) -> Result<Option<String>> {
                 "sysparm_query".into(),
                 "user_name=javascript:gs.getUserName()".into(),
             ),
-            ("sysparm_fields".into(), "user_name".into()),
-            ("sysparm_limit".into(), "1".into()),
+            ("sysparm_fields".into(), "user_name,sys_id,name".into()),
+            ("sysparm_limit".into(), "2".into()),
         ],
     )?;
-    Ok(v["result"]
-        .get(0)
-        .and_then(|r| r.get("user_name"))
-        .and_then(|x| x.as_str())
-        .map(ToString::to_string))
+    let rows = v["result"].as_array().map(Vec::as_slice).unwrap_or(&[]);
+    if rows.len() > 1 {
+        log_note(
+            "sys_user identity query returned multiple rows; the gs.getUserName() term was \
+             dropped by the instance, so the rows are arbitrary — reporting no user",
+        );
+        return Ok(None);
+    }
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let Some(user_name) = non_empty(row.get("user_name")) else {
+        return Ok(None);
+    };
+    Ok(Some(Identity {
+        user_name,
+        sys_id: non_empty(row.get("sys_id")),
+        display_name: non_empty(row.get("name")),
+        source: SOURCE_SYS_USER,
+    }))
 }
 
 pub fn logout(global: &GlobalFlags) -> Result<()> {

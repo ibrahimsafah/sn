@@ -32,6 +32,7 @@ ITSM and platform APIs:
 
 Utilities:
 
+- [API discovery](#api-discovery)
 - [Inspect and connect](#inspect-and-connect)
 - [Open a record in the web UI](#open-a-record-in-the-web-ui)
 - [Raw REST passthrough](#raw-rest-passthrough)
@@ -96,6 +97,13 @@ sn table update incident <sys_id> --data @record.json
 sn table delete incident <sys_id> --yes
 ```
 
+`--yes` skips the confirmation, and without a terminal it is required — a non-interactive run
+without it exits 1 naming the operation and its target rather than prompting into a void. Every
+destructive command carries the same guard, not only the ones spelled `delete`: `table delete`,
+`change delete`, `change task delete`, `change conflict remove`, `attachment delete`,
+`cmdb relation delete`, `catalog cart-remove`, `catalog cart-empty`, `updateset back-out`,
+`app rollback`, and `profile remove`.
+
 ## Pagination
 
 ```bash
@@ -109,9 +117,15 @@ sn table list incident --all --array --max-records 5000
 sn table list incident --all | jq -r '.number'
 ```
 
+`--all` is JSONL and only JSONL, so it refuses both other output modes with exit 1 rather than
+accepting a flag it would ignore. For columns, buffer first — `--all --array --output table`.
+`--output raw` has no equivalent: pagination flattens every page's `{"result": ...}` envelope into
+a record stream, so there is nothing left to keep; page by hand with `--setlimit`/`--offset` if the
+envelope is what you need.
+
 ## Watching records (live)
 
-`sn watch` streams record changes as they happen, over ServiceNow's AMB websocket. Output is **JSONL on stdout**: one event per line, flushed as it arrives.
+`sn watch` streams record changes as they happen, over ServiceNow's AMB websocket. Output is **JSONL on stdout**, flushed as it arrives: one event per line, plus the occasional supervisor marker described under [Gaps](#gaps-a-watch-is-best-effort-and-says-where-it-broke).
 
 ```bash
 # Stream changes to matching records. Bound the stream, or it runs until you stop it.
@@ -149,6 +163,40 @@ Worth knowing:
 - **`sn watch count` reports a delta, not a total** (`{"count": "+1"}`). Seed from `sn aggregate <TABLE> --count --query <ENCODED_QUERY>` (same query as the watch) and accumulate.
 - Ctrl-C exits 0. Works with both basic and OAuth/SSO profiles.
 - `--insecure` and `--ca-cert` are honored. **Proxies are not supported**: a profile with a proxy configured exits 1 rather than connecting around it.
+
+### Gaps: a watch is best-effort, and says where it broke
+
+AMB has no replay and no cursor. A subscription starts at "now", so every change that happened
+while a session was down is gone — no later message carries it and a reconnect cannot ask for it.
+What the watcher *can* do is say where the hole is. After an established session drops and the
+resubscribe succeeds, it writes one synthetic line:
+
+```json
+{"sn_watch":"reconnected","downtime_ms":4100,"attempt":2}
+```
+
+Everything between the preceding line and that marker is missing. Without it, a lost feed and a
+quiet table look identical.
+
+- **The marker is keyed, not shaped like an event.** `sn_watch` appears on nothing else, and it
+  carries neither `operation` nor `changes` — the two fields `--operation`/`--on-change` match on,
+  and the two a `jq` predicate is most likely to test. A marker shaped like an event would be
+  dropped by exactly the pipelines that most need to see it. Filter with
+  `jq 'select(.sn_watch == null)'` if you want events only.
+- **It is not an event**: it does not count against `--max-events` and does not reset the
+  `--idle-timeout` clock.
+- **One marker per gap, not per attempt.** `downtime_ms` spans the whole outage however many
+  reconnects it took; `attempt` is the ordinal of the one that succeeded. A clean run emits no
+  marker at all.
+- Anything that has to be complete must be reconciled against the table itself over the reported
+  window — the marker gives you exactly the interval to re-query.
+
+**`--idle-timeout` measures subscribed time, and only subscribed time.** The clock starts at the
+first successful subscribe, not at process start, and every interval spent off the channel is
+forgiven — `downtime_ms` is exactly what was forgiven. So `--idle-timeout 3` on an instance that
+takes a second to mint a session runs about four seconds, and an outage longer than the timeout
+cannot make the marker the last line of the stream. Silence still accumulates *across* sessions,
+so a connection flapping faster than the timeout cannot hold a silent watcher open forever.
 
 ## Schema discovery
 
@@ -250,7 +298,7 @@ sn change task delete <change_sys_id> <task_sys_id> --yes
 # CIs and conflicts
 sn change ci add <change_sys_id> --data '{"cmdb_ci_sys_id":"<ci_id>"}'
 sn change conflict get <sys_id>
-sn change conflict remove <sys_id>
+sn change conflict remove <sys_id> --yes   # takes no conflict id: this clears them all
 ```
 
 ## Attachments
@@ -273,6 +321,23 @@ sn attachment download <sys_id> | gzip > backup.gz
 sn attachment delete <sys_id> --yes
 ```
 
+Downloads stream through a fixed 64 KiB buffer, so memory does not track file size — 800 MB
+measured at 19 MB peak RSS — and there is no attachment too large to fetch. Three details follow
+from that:
+
+- **`--timeout` is a per-read idle timeout on a download**, not a cap on the whole transfer (it
+  still is on every other command). A slow but healthy transfer runs as long as it needs; a stalled
+  one dies `--timeout` seconds after the last byte. The connect and header phase stays bounded, so
+  a 404 still fails immediately.
+- **`--out` never leaves a truncated file behind.** Bytes are staged in a hidden `.part` file in the
+  destination's own directory and renamed into place only once the transfer completes — same
+  filesystem, so the rename is atomic. If the download fails, the staging file is removed and a file
+  already at that path is left byte-for-byte untouched, so a retry is always safe. Ctrl-C removes the
+  staging file and exits **130**.
+- **stdout has no undo.** Bytes handed to a pipe cannot be recalled, so a mid-stream failure is exit
+  3 with an error naming how many truncated bytes were already written. Prefer `--out` for anything
+  large.
+
 ## CMDB
 
 CRUD and relationships on Configuration Items of any class:
@@ -282,12 +347,29 @@ sn cmdb list cmdb_ci_server --query "operational_status=1" --setlimit 20
 sn cmdb get cmdb_ci_server <sys_id>                                     # includes relations
 sn cmdb create cmdb_ci_server --field name=web-server-01 --field ip_address=10.0.1.50
 sn cmdb update cmdb_ci_server <sys_id> --field operational_status=2     # PATCH
+sn cmdb update cmdb_ci_server <sys_id> --field name=web-01 --source "Other Automated"
 sn cmdb meta cmdb_ci_server                                             # class schema
 
 # Relations
 sn cmdb relation add cmdb_ci_server <sys_id> --data '{"outbound_relations":[{"type":"<cmdb_rel_type_sys_id>","target":"<target_ci_sys_id>"}]}'
 sn cmdb relation delete cmdb_ci_server <sys_id> <rel_sys_id> --yes
 ```
+
+The CMDB Instance API takes writes in an envelope, `{"attributes": {...}, "source": "..."}`, and
+`sn` builds it: give `create`/`update` flat fields exactly as on `table` and they are wrapped for
+you. Values go out as strings, because the API casts each attribute to a Java `String` and answers a
+JSON number or boolean with an HTTP 500 — so `--field cpu_count=8` sends `"8"`, while an object or
+array is refused up front with a usage error. A body whose `attributes` is a JSON object is taken as
+an envelope you wrote yourself and passed through unchanged; that is how `inbound_relations` /
+`outbound_relations` ride along on a create.
+
+`--source` is the record's provenance and lands in `discovery_source`. It defaults to
+`"Manual Entry"` — the truthful value for a CLI write. Name a real discovery source only when
+standing in for it: the IRE reconciles by source, so borrowing a tool's name lets that tool's next
+run overwrite the record. Valid values are the choices on `cmdb_ci.discovery_source`
+(`sn schema choices cmdb_ci discovery_source`). Giving `source` in both a flat body and the flag —
+or in a flat body at all, where the API would drop it — is a usage error rather than a silent
+preference.
 
 ## Import Sets
 
@@ -314,14 +396,20 @@ sn catalog item-variables <item_sys_id>       # form fields required to order
 # Order immediately (bypasses the cart)
 sn catalog order <item_sys_id> --data '{"sysparm_quantity":"1"}'
 
-# ...or work the cart (cart-update / cart-remove / cart-empty also available)
+# ...or work the cart
 sn catalog add-to-cart <item_sys_id> --data '{"sysparm_quantity":"1"}'
 sn catalog cart
+sn catalog cart-update <cart_item_id> --data '{"sysparm_quantity":"2"}'
+sn catalog cart-remove <cart_item_id> --yes   # drops one line
+sn catalog cart-empty <cart_sys_id> --yes     # drops the whole cart; nothing restores it
 sn catalog checkout
 sn catalog submit-order
 
 sn catalog wishlist
 ```
+
+`cart-remove` and `cart-empty` are gated like a delete: on a terminal they prompt, and without a
+terminal they need `--yes` or exit 1.
 
 ## Identification & Reconciliation
 
@@ -348,7 +436,7 @@ sn identify query-enhanced --data @query.json --data-source "discovery"
 # App Repository lifecycle
 sn app install  --scope x_myapp --version 1.2.0 --wait
 sn app publish  --scope x_myapp --version 1.3.0 --dev-notes "Bug fixes" --wait
-sn app rollback --scope x_myapp --version 1.1.0 --wait
+sn app rollback --scope x_myapp --version 1.1.0 --wait --yes
 
 # Update sets
 sn updateset create --name "My Changes" --description "Sprint 42 work"
@@ -356,7 +444,7 @@ sn updateset retrieve --update-set-id <id> --auto-preview
 sn updateset preview <remote_update_set_id> --wait
 sn updateset commit  <remote_update_set_id> --wait
 sn updateset commit-multiple --ids id1,id2,id3
-sn updateset back-out --update-set-id <id> --wait
+sn updateset back-out --update-set-id <id> --wait --yes
 
 # ATF suites
 sn atf run --suite-name "Regression Suite" --wait --wait-timeout 900
@@ -365,6 +453,15 @@ sn atf results <result_id>
 # Poll an operation already in flight
 sn progress <progress_id>
 ```
+
+`app rollback` and `updateset back-out` require `--yes` without a terminal, the same guard the
+deletes carry: a back-out reverts every record its update set applied, a rollback replaces an
+installed app instance-wide, both run asynchronously, and neither has an undo.
+
+`--wait` honors `--output raw` and `--output table` — under raw it used to emit the initial,
+unpolled response and never wait at all. A failed operation is exit 2 with the progress object on
+stderr under `.error.sn_error`, and no `status_code`, since the instance reported the failure inside
+an HTTP 200.
 
 ## Performance Analytics scorecards
 
@@ -379,17 +476,64 @@ sn scores favorite <uuid>
 sn scores unfavorite <uuid>
 ```
 
+## API discovery
+
+`sn schema` answers "what does this table look like?"; `sn api` answers "is there an API for this?"
+It reads the same catalogue the instance's REST API Explorer does:
+
+```bash
+sn api list                          # every namespace, with API and endpoint counts
+sn api list --namespace sn_chg_rest  # the APIs in one namespace
+sn api search attachment             # matching endpoints, with method and route
+sn api search cart --namespace sn_sc --method POST
+sn api spec "Table API"              # the OpenAPI 3 document
+sn api spec "Table API" --format yaml > table-api.yaml
+```
+
+`search` matches case-insensitively across namespace, API name, route and both descriptions, and
+each row carries what a call needs — `route` is relative to `/api`, so
+`/now/attachment/{sys_id}` is `sn raw DELETE /api/now/attachment/<sys_id>`. `list` and `search`
+summarize; `--output raw` prints the catalogue endpoint's own response instead (several hundred KB)
+for piping to `jq`, and `--output table` renders either as columns.
+
+`spec` takes the name `list` reports; a unique case-insensitive substring is enough, and an
+ambiguous one exits 1 listing the candidates with their namespaces so `--namespace` can break the
+tie. `--format yaml` goes to stdout verbatim and ignores `--pretty`/`--compact`/`--output`.
+
+An unknown `--namespace` is a usage error naming the near miss — the endpoint answers a bad
+namespace with `{"result":{}}` and HTTP 200, which would otherwise be indistinguishable from "no
+matches". A genuine 404 keeps the instance's own explanation ("Version v99 not found for now/Table
+API") instead of being rewritten as a guess about the release.
+
 ## Inspect and connect
 
 ```bash
-# Latency + auth + ServiceNow build version — one-shot health check (either auth method)
+# Auth + identity + latency + build — one-shot health check (either auth method)
 sn ping
-# {"build_name":"Vancouver","build_tag":"glide-vancouver-...","instance":"acme.service-now.com",
-#  "latency_ms":134,"ok":true,"profile":"prod","username":"admin"}
+# {"ok":true,"profile":"prod","instance":"acme.service-now.com","username":"admin",
+#  "identity_source":"sg/impersonation/session","user_sys_id":null,"user_display_name":null,
+#  "admin":true,"can_impersonate":true,"impersonating":false,"original_user":"admin",
+#  "latency_ms":134,"build_name":null,"build_tag":null}
 
-# The authenticated user, resolved via gs.getUserName()
+# The caller's own sys_user record
 sn user me
 ```
+
+`username` is **the instance's answer, not the configured one** — `sn ping` asks an endpoint that
+names the caller, because echoing the profile back verifies nothing about identity and the two
+disagree exactly when the profile is wrong. `identity_source` says which endpoint answered
+(`sg/impersonation/session`, `ui/user/current_user`, `sys_user`, or `profile` for the configured
+name as a last resort). `admin`, `can_impersonate`, `impersonating` and `original_user` come from
+the same probe and are `null` when the endpoint that carries them is absent; `impersonating` is
+`true` only when two present, non-blank names differ. `build_name`/`build_tag` need their own
+`sys_properties` read and are `null` when it returns nothing — a Zurich PDI carries neither
+`glide.buildname` nor `glide.buildtag`, so null there means "the instance doesn't publish it", not
+a failure.
+
+`sn user me` resolves the caller's sys_id and reads that one record — no `javascript:` term on the
+wire, so a term the instance cannot evaluate cannot be silently dropped and leave you holding a
+stranger's record. On an instance without that endpoint it falls back to the scripted `sys_user`
+read and exits 2 if the filter was evidently dropped.
 
 ## Open a record in the web UI
 
@@ -397,6 +541,10 @@ sn user me
 sn open incident <sys_id>                # any table; opens the form in your default browser
 sn open incident <sys_id> --print-url    # print the URL instead of opening it
 ```
+
+Opening emits `{"opened": true, "url": "..."}` and honors `--output`. `--print-url`
+deliberately does not: it writes the bare URL and nothing else, under every
+`--output` mode, so `$(sn open … --print-url)` is directly usable in a shell.
 
 ## Raw REST passthrough
 
@@ -417,7 +565,15 @@ Most read commands accept `--output table` for columns instead of JSON — for i
 ```bash
 sn table list incident --setlimit 5 --output table
 sn schema columns incident --writable --output table
+sn aggregate incident --count --group-by state --output table
+sn api search attachment --method DELETE --output table
+sn table list incident --query "active=true" --all --array --output table
 ```
+
+`aggregate`, `scores list`, `scores favorite` and `open` accepted `--output table` and silently
+ignored it in earlier releases; all four go through the same renderer as every other command now.
+`--all` still refuses it — a table cannot size a column without seeing every row, so buffer with
+`--array` as above.
 
 ## Shell completions
 
@@ -449,23 +605,31 @@ Commands emit JSON on stdout by a few consistent rules:
 - `graphql` → the response's `data` value, unwrapped; a non-empty `errors` array means exit 2 with the errors on stderr (partial `data` still reaches stdout).
 - Async CICD (`app`, `updateset`, `atf run`, `progress`) → a progress object carrying `status` — a numeric **string**, not a word: `"0"` pending, `"1"` running, `"2"` successful, `"3"` failed, `"4"` cancelled — alongside `status_message`, `percent_complete`, and the operation's id at `links.progress.id`.
 - `attachment download` → raw bytes (or `{"path","size"}` metadata JSON when you pass `--out <file>`). The destination flag is `--out`/`-o`; `--output` is reserved CLI-wide for the output *mode*.
+- `api list` / `api search` → an array of summary rows; `api spec` → the OpenAPI document (JSON, or YAML verbatim under `--format yaml`).
+- `profile use` → `{"ok","profile","default"}`; `profile remove` → `{"ok","profile","removed","wasDefault"}`, with `removed:false` and exit 0 when there was no such profile.
+- `scores unfavorite` → the endpoint's body, or `{"ok","uuid"}` when there is none; it used to print nothing at all. `scores favorite` passes the body through as-is, which is `null` on an instance that answers the POST with no content.
 
 Across every command:
 
-- `--output raw` preserves ServiceNow's `{"result": ...}` envelope; `--output table` renders columns (interactive only).
+- `--output raw` preserves ServiceNow's `{"result": ...}` envelope; `--output table` renders columns (interactive only). A mode a command cannot honor is a usage error, not a silent fallback: `--all` refuses both.
 - Output is pretty-printed on a TTY, compact when piped — override with `--pretty` / `--compact`.
-- Errors always go to stderr: `{"error": {"message", "detail?", "status_code?", "transaction_id?", "sn_error?"}}` — `sn_error` carries ServiceNow's raw error object.
-- `--timeout <SECS>` bounds every request (default 30s).
+- Errors always go to stderr: `{"error": {"message", "detail?", "status_code?", "transaction_id?", "sn_error?"}}` — `sn_error` carries ServiceNow's raw error object. Only `message` is guaranteed; `status_code` is **omitted** when the failure carried no HTTP status (a CICD operation reported as failed inside a 200 under `--wait`, a scripted query the instance dropped) — never a fabricated `0`. It *is* reported as `200` where the HTTP call genuinely succeeded and ServiceNow put the failure in the body (`sn graphql`, `sn journal`, `sn variables set`), so the key says what HTTP said, not whether the command worked: branch on the exit code instead.
+- `--timeout <SECS>` bounds every request (default 30s) — except on `attachment download`, where it becomes a per-read idle timeout.
 
 ## Exit codes
 
 | Code | Meaning |
 |---|---|
 | 0 | Success |
-| 1 | Usage or config error |
-| 2 | API error (4xx/5xx, non-auth) |
+| 1 | Usage or config error — including a destructive command refused for want of `--yes`, and a config write that could not take the directory lock within 10s |
+| 2 | API error (4xx/5xx, non-auth), or a failure the instance reported inside an HTTP 200 |
 | 3 | Network / transport error |
-| 4 | Auth error (401/403) |
+| 4 | Auth error — every 401 and every 403 |
+
+Exit 4 is wider than "wrong password": a 403 from an ACL, a field the role cannot write, or an
+expired token all land here, and `status_code` is the only thing distinguishing them. There is no
+exit 2 with `status_code: 403`. Re-authenticating fixes the 401 case only; if the same call fails
+again, the answer is a role or an ACL.
 
 ## Parameters
 

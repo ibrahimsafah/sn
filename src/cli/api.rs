@@ -19,7 +19,7 @@
 
 use crate::cli::table::{build_client_with_headers, build_profile, write_response};
 use crate::cli::{GlobalFlags, OutputMode};
-use crate::client::Client;
+use crate::client::{Client, DownloadError};
 use crate::error::{Error, Result};
 use clap::{Subcommand, ValueEnum};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
@@ -211,10 +211,23 @@ pub fn spec(global: &GlobalFlags, args: ApiSpecArgs) -> Result<()> {
             // response `sn api` writes to stdout itself, the way
             // `sn attachment download` does. `download_file` takes no query
             // parameters, hence the pre-encoded path.
-            let (bytes, _content_type) =
-                client
-                    .download_file(&path_with_query(OAS_PATH, &query))
-                    .map_err(|e| diagnose(&client, OAS_PATH, e, Some(&hint)))?;
+            let mut download = client
+                .download_file(&path_with_query(OAS_PATH, &query))
+                .map_err(|e| diagnose(&client, OAS_PATH, e, Some(&hint)))?;
+            // Buffered rather than streamed to stdout, unlike `sn attachment
+            // download`: a spec is a bounded document (the instance's *entire*
+            // catalogue is ~460 KB) and the JSON arm above already holds one
+            // parsed in memory, so there is no attachment-sized payload to guard
+            // against — and holding it keeps the trailing-newline fixup below a
+            // question about the last byte rather than about writer state.
+            let mut bytes = Vec::new();
+            download.copy_to(&mut bytes).map_err(|e| match e {
+                DownloadError::Source(err) => err,
+                // A `Vec` sink cannot refuse bytes; kept as a real arm rather
+                // than an `unreachable!` so a future change of sink is a
+                // compile-time concern, not a panic.
+                DownloadError::Sink(err) => Error::Transport(err.to_string()),
+            })?;
             let mut out = io::stdout().lock();
             out.write_all(&bytes)
                 .map_err(crate::output::map_stdout_err)?;

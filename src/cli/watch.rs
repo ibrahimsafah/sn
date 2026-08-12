@@ -1068,14 +1068,17 @@ mod tests {
     #[test]
     fn an_outage_is_forgiven_rather_than_counted_as_idle() {
         // Time with no channel open is time nothing *could* have arrived on, so
-        // it is not idleness. Both ends of this are exact: the clock is moved by
-        // a stated duration, not by sleeping.
-        let idle = Some(Duration::from_millis(100));
+        // it is not idleness. The staleness is set exactly rather than slept for,
+        // but the second reading is still against a real clock — forgiving all of
+        // it parks `last_event` at the `buffered` call, so the timeout has to
+        // outlast this test's own scheduling. Seconds against microseconds of
+        // work; nothing here sleeps, so the size is free.
+        let idle = Some(Duration::from_secs(1));
         let mut s = buffered(None);
-        s.last_event -= Duration::from_millis(300);
-        assert!(s.idle_expired(idle), "300ms with nothing delivered");
+        s.last_event -= Duration::from_secs(3);
+        assert!(s.idle_expired(idle), "3s with nothing delivered");
 
-        s.resume(Duration::from_millis(300));
+        s.resume(Duration::from_secs(3));
         assert!(
             !s.idle_expired(idle),
             "…but all of it was spent off the socket"
@@ -1497,12 +1500,18 @@ mod tests {
         // the session mint and handshake against --idle-timeout made a watcher
         // on a slow instance subscribe and then immediately exit 0 with an empty
         // stream — indistinguishable from a table where nothing happened.
+        //
+        // Two constraints. The connect must outlast the timeout or the test
+        // proves nothing — safe in itself, since a sleep only ever overruns. The
+        // fragile one is the timeout: `resume` parks the idle clock at the
+        // subscribe, so the whole of it is the scheduling stall tolerated before
+        // the check preceding the first poll fires and empties the stream.
         let mut s = buffered(Some(1));
         let (result, _) = play(
             Script {
                 attempts: vec![Attempt::Opens(vec![Step::Deliver(vec![insert()])])],
-                idle: Some(Duration::from_millis(100)),
-                connect_delay: Duration::from_millis(250),
+                idle: Some(Duration::from_millis(250)),
+                connect_delay: Duration::from_millis(400),
                 ..Default::default()
             },
             &mut s,
@@ -1521,6 +1530,12 @@ mod tests {
         // shorter than the backoff (guaranteed once backoff caps at 60s) turned
         // "we reconnected" into "…and then gave up", never covering the hole it
         // had just announced.
+        //
+        // Same two constraints as the slow first connect, with the backoff wait
+        // standing in for the connect: the outage must outlast the timeout, and
+        // the timeout is what the replacement session then has to reach its
+        // event in — 250ms of scheduling stall before the marker is left as the
+        // last line, which is the failure this test exists to catch.
         let mut s = buffered(Some(2));
         let (result, _) = play(
             Script {
@@ -1528,8 +1543,8 @@ mod tests {
                     Attempt::Opens(vec![Step::Deliver(vec![insert()]), Step::Drop]),
                     Attempt::Opens(vec![Step::Deliver(vec![update()])]),
                 ],
-                idle: Some(Duration::from_millis(100)),
-                pause: Duration::from_millis(250),
+                idle: Some(Duration::from_millis(250)),
+                pause: Duration::from_millis(400),
                 ..Default::default()
             },
             &mut s,
@@ -1548,21 +1563,28 @@ mod tests {
     fn silence_accumulates_across_sessions_so_flapping_cannot_hold_a_watcher_open() {
         // Forgiving an outage must be weaker than restarting the clock: a socket
         // that drops faster than --idle-timeout would otherwise keep a watcher
-        // that has delivered nothing alive forever. 20ms of silence either side
-        // of a drop is 40ms of silence, and the timeout is 30ms — so the second
-        // session must expire on its first quiet poll and never reach the event
-        // scripted behind it.
+        // that has delivered nothing alive forever. The property is a sandwich,
+        // Q < T < 2Q: one session's quiet (Q=200ms) must not expire the timeout
+        // (T=300ms), while quiet either side of a drop (400ms) must — so the
+        // second session expires on its first quiet poll and never reaches the
+        // event scripted behind it.
+        //
+        // The magnitudes buy nothing but margin, and the margin is what the test
+        // is: T-Q is the scheduling stall it tolerates in either direction. At
+        // 20/30 that was 10ms, and a loaded CI runner expired the first session
+        // before it could drop, leaving one subscribe instead of two. Scale both
+        // together or the property goes with them.
         let mut s = buffered(None);
         let (result, log) = play(
             Script {
                 attempts: vec![
-                    Attempt::Opens(vec![Step::Quiet(Duration::from_millis(20)), Step::Drop]),
+                    Attempt::Opens(vec![Step::Quiet(Duration::from_millis(200)), Step::Drop]),
                     Attempt::Opens(vec![
-                        Step::Quiet(Duration::from_millis(20)),
+                        Step::Quiet(Duration::from_millis(200)),
                         Step::Deliver(vec![update()]),
                     ]),
                 ],
-                idle: Some(Duration::from_millis(30)),
+                idle: Some(Duration::from_millis(300)),
                 ..Default::default()
             },
             &mut s,
@@ -1576,14 +1598,18 @@ mod tests {
 
     #[test]
     fn silence_while_subscribed_still_expires_the_idle_clock() {
+        // Quiet is twice the timeout so the expiry is the poll's silence and not
+        // the harness's own overhead: a stall large enough to expire the clock
+        // *before* the first poll would leave the same empty stream and assert
+        // nothing. 100ms of headroom before that reading becomes possible.
         let mut s = buffered(None);
         let (result, _) = play(
             Script {
                 attempts: vec![Attempt::Opens(vec![
-                    Step::Quiet(Duration::from_millis(60)),
+                    Step::Quiet(Duration::from_millis(200)),
                     Step::Deliver(vec![update()]),
                 ])],
-                idle: Some(Duration::from_millis(30)),
+                idle: Some(Duration::from_millis(100)),
                 ..Default::default()
             },
             &mut s,

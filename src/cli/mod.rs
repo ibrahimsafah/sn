@@ -1,4 +1,5 @@
 pub mod aggregate;
+pub mod api;
 pub mod app;
 pub mod atf;
 pub mod attachment;
@@ -27,6 +28,7 @@ pub mod variables;
 pub mod watch;
 
 pub use aggregate::AggregateArgs;
+pub use api::{ApiListArgs, ApiSearchArgs, ApiSpecArgs, ApiSub, SpecFormat};
 pub use app::{AppInstallArgs, AppPublishArgs, AppRollbackArgs, AppSub};
 pub use atf::{AtfResultsArgs, AtfRunArgs, AtfSub};
 pub use attachment::{
@@ -363,6 +365,11 @@ pub enum Command {
     Schema {
         #[command(subcommand)]
         sub: SchemaSub,
+    },
+    /// Discover the instance's REST APIs (namespaces, endpoints, OpenAPI specs).
+    Api {
+        #[command(subcommand)]
+        sub: ApiSub,
     },
     /// Dump the full command tree as JSON for agent/MCP generation.
     Introspect,

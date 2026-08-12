@@ -17,7 +17,7 @@
 //! at all settles that the family is present, leaving the endpoint's own detail
 //! as the honest explanation.
 
-use crate::cli::table::{build_client_with_headers, build_profile, write_response};
+use crate::cli::kernel::{build_client_with_headers, build_profile, write_response};
 use crate::cli::{GlobalFlags, OutputMode};
 use crate::client::{Client, DownloadError};
 use crate::error::{Error, Result};

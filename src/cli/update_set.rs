@@ -1,4 +1,4 @@
-use crate::cli::table::{build_client, build_profile, confirm_destructive, unwrap_or_raw};
+use crate::cli::kernel::{confirm_destructive, connect, emit, unwrap_or_raw};
 use crate::cli::GlobalFlags;
 use crate::error::Result;
 use clap::Subcommand;
@@ -107,8 +107,7 @@ pub struct UpdateSetBackOutArgs {
 }
 
 pub fn create(global: &GlobalFlags, args: UpdateSetCreateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = vec![("update_set_name".into(), args.name)];
     if let Some(v) = args.description {
         query.push(("description".into(), v));
@@ -124,13 +123,11 @@ pub fn create(global: &GlobalFlags, args: UpdateSetCreateArgs) -> Result<()> {
         &query,
         &serde_json::json!({}),
     )?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn retrieve(global: &GlobalFlags, args: UpdateSetRetrieveArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = vec![("update_set_id".into(), args.update_set_id)];
     if let Some(v) = args.update_source_id {
         query.push(("update_source_id".into(), v));
@@ -154,8 +151,7 @@ pub fn retrieve(global: &GlobalFlags, args: UpdateSetRetrieveArgs) -> Result<()>
 }
 
 pub fn preview(global: &GlobalFlags, args: UpdateSetIdArg) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!(
         "/api/sn_cicd/update_set/preview/{}",
         args.remote_update_set_id
@@ -166,8 +162,7 @@ pub fn preview(global: &GlobalFlags, args: UpdateSetIdArg) -> Result<()> {
 }
 
 pub fn commit(global: &GlobalFlags, args: UpdateSetIdArg) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!(
         "/api/sn_cicd/update_set/commit/{}",
         args.remote_update_set_id
@@ -178,8 +173,7 @@ pub fn commit(global: &GlobalFlags, args: UpdateSetIdArg) -> Result<()> {
 }
 
 pub fn commit_multiple(global: &GlobalFlags, args: UpdateSetCommitMultipleArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let query = vec![("remote_update_set_ids".into(), args.ids)];
     let resp = client.post(
         "/api/sn_cicd/update_set/commitMultiple",
@@ -199,8 +193,7 @@ pub fn back_out(global: &GlobalFlags, args: UpdateSetBackOutArgs) -> Result<()> 
         "back out",
         &format!("update set {}", args.update_set_id),
     )?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = vec![("update_set_id".into(), args.update_set_id)];
     if args.rollback_installs {
         query.push(("rollback_installs".into(), "true".into()));

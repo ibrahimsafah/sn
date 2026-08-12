@@ -72,7 +72,8 @@
 //! hold a watcher open forever: silence accumulates across sessions.
 
 use crate::amb::{self, Amb, Event};
-use crate::cli::table::{build_client, build_profile, DisplayValueArg};
+use crate::cli::kernel::{build_client, build_profile};
+use crate::cli::DisplayValueArg;
 use crate::cli::GlobalFlags;
 use crate::client::Client;
 use crate::config::ResolvedProfile;

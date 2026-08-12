@@ -1,5 +1,5 @@
 use crate::body::{build_body, BodyInput};
-use crate::cli::table::{build_client, build_profile, confirm_delete, unwrap_or_raw};
+use crate::cli::kernel::{confirm_delete, connect, emit};
 use crate::cli::GlobalFlags;
 use crate::error::{Error, Result};
 use clap::Subcommand;
@@ -132,8 +132,7 @@ pub struct CmdbRelationDeleteArgs {
 }
 
 pub fn list(global: &GlobalFlags, args: CmdbListArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/cmdb/instance/{}", args.class);
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.query {
@@ -144,17 +143,14 @@ pub fn list(global: &GlobalFlags, args: CmdbListArgs) -> Result<()> {
         query.push(("sysparm_offset".into(), v.to_string()));
     }
     let resp = client.get(&path, &query)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn get(global: &GlobalFlags, args: CmdbGetArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/cmdb/instance/{}/{}", args.class, args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 /// Wrap a flat field map in the IRE envelope the CMDB Instance API demands:
@@ -270,8 +266,7 @@ fn stringify_attributes(attrs: &mut Value) -> Result<()> {
 }
 
 pub fn create(global: &GlobalFlags, args: CmdbCreateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/cmdb/instance/{}", args.class);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -282,13 +277,11 @@ pub fn create(global: &GlobalFlags, args: CmdbCreateArgs) -> Result<()> {
     };
     let body = ire_envelope(build_body(body_input)?, args.source)?;
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn update(global: &GlobalFlags, args: CmdbUpdateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/cmdb/instance/{}/{}", args.class, args.sys_id);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -299,17 +292,14 @@ pub fn update(global: &GlobalFlags, args: CmdbUpdateArgs) -> Result<()> {
     };
     let body = ire_envelope(build_body(body_input)?, args.source)?;
     let resp = client.patch(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn meta(global: &GlobalFlags, args: CmdbMetaArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/cmdb/meta/{}", args.class);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn relation(global: &GlobalFlags, sub: CmdbRelationSub) -> Result<()> {
@@ -320,8 +310,7 @@ pub fn relation(global: &GlobalFlags, sub: CmdbRelationSub) -> Result<()> {
 }
 
 fn relation_add(global: &GlobalFlags, args: CmdbRelationAddArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!(
         "/api/now/cmdb/instance/{}/{}/relation",
         args.class, args.sys_id
@@ -335,8 +324,7 @@ fn relation_add(global: &GlobalFlags, args: CmdbRelationAddArgs) -> Result<()> {
     };
     let body = build_body(body_input)?;
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 fn relation_delete(global: &GlobalFlags, args: CmdbRelationDeleteArgs) -> Result<()> {
@@ -347,8 +335,7 @@ fn relation_delete(global: &GlobalFlags, args: CmdbRelationDeleteArgs) -> Result
             args.rel_sys_id, args.class, args.sys_id
         ),
     )?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!(
         "/api/now/cmdb/instance/{}/{}/relation/{}",
         args.class, args.sys_id, args.rel_sys_id

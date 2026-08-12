@@ -1,5 +1,5 @@
 use crate::body::{build_body, BodyInput};
-use crate::cli::table::{build_client, build_profile, unwrap_or_raw};
+use crate::cli::kernel::{connect, emit};
 use crate::cli::GlobalFlags;
 use crate::error::Result;
 use clap::Subcommand;
@@ -46,8 +46,7 @@ pub struct IdentifyEnhancedArgs {
 }
 
 pub fn create_update(global: &GlobalFlags, args: IdentifyArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
     } else if !args.field.is_empty() {
@@ -61,13 +60,11 @@ pub fn create_update(global: &GlobalFlags, args: IdentifyArgs) -> Result<()> {
         query.push(("sysparm_data_source".into(), v));
     }
     let resp = client.post("/api/now/identifyreconcile", &query, &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn query(global: &GlobalFlags, args: IdentifyArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
     } else if !args.field.is_empty() {
@@ -81,13 +78,11 @@ pub fn query(global: &GlobalFlags, args: IdentifyArgs) -> Result<()> {
         query_params.push(("sysparm_data_source".into(), v));
     }
     let resp = client.post("/api/now/identifyreconcile/query", &query_params, &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn create_update_enhanced(global: &GlobalFlags, args: IdentifyEnhancedArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
     } else if !args.field.is_empty() {
@@ -104,13 +99,11 @@ pub fn create_update_enhanced(global: &GlobalFlags, args: IdentifyEnhancedArgs) 
         query.push(("options".into(), v));
     }
     let resp = client.post("/api/now/identifyreconcile/enhanced", &query, &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn query_enhanced(global: &GlobalFlags, args: IdentifyEnhancedArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
     } else if !args.field.is_empty() {
@@ -127,6 +120,5 @@ pub fn query_enhanced(global: &GlobalFlags, args: IdentifyEnhancedArgs) -> Resul
         query.push(("options".into(), v));
     }
     let resp = client.post("/api/now/identifyreconcile/queryEnhanced", &query, &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }

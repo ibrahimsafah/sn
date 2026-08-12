@@ -1,5 +1,5 @@
 use crate::cli::auth::{complete_oauth_login, whoami};
-use crate::cli::table::{build_client, build_profile, confirm_destructive, write_response};
+use crate::cli::kernel::{build_client, build_profile, confirm_destructive, write_response};
 use crate::cli::GlobalFlags;
 use crate::config::{
     self, config_path, credentials_path, default_redirect_uri, load_config_from,

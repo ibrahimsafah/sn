@@ -1,4 +1,4 @@
-use crate::cli::table::{build_client, build_profile, take_field};
+use crate::cli::kernel::{connect, take_field, write_response};
 use crate::cli::{GlobalFlags, OutputMode};
 use crate::error::{Error, Result};
 use clap::Subcommand;
@@ -57,8 +57,7 @@ pub struct SchemaChoicesArgs {
 }
 
 pub fn tables(global: &GlobalFlags, args: SchemaTablesArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let resp = client.get("/api/now/doc/table/schema", &[])?;
     // Every table on the instance comes back here — thousands of objects — so
     // this unwraps by moving rather than cloning the array out of the envelope.
@@ -75,7 +74,7 @@ pub fn tables(global: &GlobalFlags, args: SchemaTablesArgs) -> Result<()> {
             other => other,
         },
     };
-    crate::cli::table::write_response(global, &list)
+    write_response(global, &list)
 }
 
 fn filter_tables(items: Vec<Value>, args: &SchemaTablesArgs) -> Vec<Value> {
@@ -112,8 +111,7 @@ fn filter_tables(items: Vec<Value>, args: &SchemaTablesArgs) -> Vec<Value> {
 }
 
 pub fn columns(global: &GlobalFlags, args: SchemaColumnsArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/ui/meta/{}", args.table);
     let resp = client.get(&path, &[])?;
     let list = match global.output {
@@ -125,7 +123,7 @@ pub fn columns(global: &GlobalFlags, args: SchemaColumnsArgs) -> Result<()> {
             Value::Array(filter_columns(cols, &args))
         }
     };
-    crate::cli::table::write_response(global, &list)
+    write_response(global, &list)
 }
 
 fn filter_columns(cols: Value, args: &SchemaColumnsArgs) -> Vec<Value> {
@@ -181,8 +179,7 @@ fn keep_column(col: &Value, args: &SchemaColumnsArgs) -> bool {
 }
 
 pub fn choices(global: &GlobalFlags, args: SchemaChoicesArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/ui/meta/{}", args.table);
     let resp = client.get(&path, &[])?;
     let out = match global.output {
@@ -198,5 +195,5 @@ pub fn choices(global: &GlobalFlags, args: SchemaChoicesArgs) -> Result<()> {
                 ))
             })?,
     };
-    crate::cli::table::write_response(global, &out)
+    write_response(global, &out)
 }

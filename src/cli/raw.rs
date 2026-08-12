@@ -4,7 +4,7 @@ use crate::error::{Error, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
 use serde_json::Value;
 
-use super::table::{build_client_with_headers, build_profile, write_response};
+use super::kernel::{build_client_with_headers, build_profile, write_response};
 
 #[derive(clap::Args, Debug)]
 pub struct RawArgs {

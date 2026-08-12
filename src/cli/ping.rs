@@ -1,5 +1,5 @@
 use crate::cli::auth::{identify, non_empty, Identity};
-use crate::cli::table::{build_client, build_profile, write_response};
+use crate::cli::kernel::{build_client, build_profile, write_response};
 use crate::cli::GlobalFlags;
 use crate::client::Client;
 use crate::error::{Error, Result};

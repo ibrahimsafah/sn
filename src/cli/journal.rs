@@ -21,7 +21,7 @@
 //! will split the entry there.
 
 use crate::cli::graphql::{errors_to_api_error, execute, graphql_errors};
-use crate::cli::table::{build_client, build_profile, write_response};
+use crate::cli::kernel::{connect, write_response};
 use crate::cli::GlobalFlags;
 use crate::client::Client;
 use crate::error::{Error, Result};
@@ -83,8 +83,7 @@ pub fn run(global: &GlobalFlags, args: JournalArgs) -> Result<()> {
     validate_identifier(&args.table, "table")?;
     validate_sys_id(&args.sys_id)?;
 
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
 
     let filter = if args.comments {
         Some("comments")

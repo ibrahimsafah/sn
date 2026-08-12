@@ -14,6 +14,7 @@ pub mod import;
 pub mod init;
 pub mod introspect;
 pub mod journal;
+pub(crate) mod kernel;
 pub mod open_record;
 pub mod ping;
 pub mod profile;

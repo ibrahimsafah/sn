@@ -1,5 +1,5 @@
 use crate::body::{build_body, BodyInput};
-use crate::cli::table::{build_client, build_profile, confirm_destructive, unwrap_or_raw};
+use crate::cli::kernel::{confirm_destructive, connect, emit};
 use crate::cli::GlobalFlags;
 use crate::error::Result;
 use clap::Subcommand;
@@ -159,29 +159,24 @@ pub struct CatalogCartEmptyArgs {
 const BASE: &str = "/api/sn_sc/servicecatalog";
 
 pub fn list(global: &GlobalFlags, args: CatalogListArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.text {
         query.push(("sysparm_text".into(), v));
     }
     let resp = client.get(&format!("{BASE}/catalogs"), &query)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn get(global: &GlobalFlags, args: CatalogGetArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{BASE}/catalogs/{}", args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn categories(global: &GlobalFlags, args: CatalogCategoriesArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{BASE}/catalogs/{}/categories", args.catalog_sys_id);
     let mut query: Vec<(String, String)> = Vec::new();
     query.push(("sysparm_limit".into(), args.setlimit.to_string()));
@@ -192,22 +187,18 @@ pub fn categories(global: &GlobalFlags, args: CatalogCategoriesArgs) -> Result<(
         query.push(("sysparm_top_level_only".into(), "true".into()));
     }
     let resp = client.get(&path, &query)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn category(global: &GlobalFlags, args: CatalogCategoryArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{BASE}/categories/{}", args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn items(global: &GlobalFlags, args: CatalogItemsArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.text {
         query.push(("sysparm_text".into(), v));
@@ -226,31 +217,25 @@ pub fn items(global: &GlobalFlags, args: CatalogItemsArgs) -> Result<()> {
         query.push(("sysparm_offset".into(), v.to_string()));
     }
     let resp = client.get(&format!("{BASE}/items"), &query)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn item(global: &GlobalFlags, args: CatalogItemArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{BASE}/items/{}", args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn item_variables(global: &GlobalFlags, args: CatalogItemArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{BASE}/items/{}/variables", args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn order(global: &GlobalFlags, args: CatalogOrderArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{BASE}/items/{}/order_now", args.sys_id);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -261,13 +246,11 @@ pub fn order(global: &GlobalFlags, args: CatalogOrderArgs) -> Result<()> {
     };
     let body = build_body(body_input)?;
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn add_to_cart(global: &GlobalFlags, args: CatalogOrderArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{BASE}/items/{}/add_to_cart", args.sys_id);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -278,21 +261,17 @@ pub fn add_to_cart(global: &GlobalFlags, args: CatalogOrderArgs) -> Result<()> {
     };
     let body = build_body(body_input)?;
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn cart(global: &GlobalFlags) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let resp = client.get(&format!("{BASE}/cart"), &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn cart_update(global: &GlobalFlags, args: CatalogCartUpdateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{BASE}/cart/{}", args.cart_item_id);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -303,8 +282,7 @@ pub fn cart_update(global: &GlobalFlags, args: CatalogCartUpdateArgs) -> Result<
     };
     let body = build_body(body_input)?;
     let resp = client.put(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn cart_remove(global: &GlobalFlags, args: CatalogCartItemArgs) -> Result<()> {
@@ -313,8 +291,7 @@ pub fn cart_remove(global: &GlobalFlags, args: CatalogCartItemArgs) -> Result<()
         "remove",
         &format!("cart item {}", args.cart_item_id),
     )?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{BASE}/cart/{}", args.cart_item_id);
     client.delete(&path, &[])?;
     Ok(())
@@ -324,41 +301,34 @@ pub fn cart_empty(global: &GlobalFlags, args: CatalogCartEmptyArgs) -> Result<()
     // One DELETE discards every line the caller built up, and the cart is not
     // versioned anywhere — there is nothing to restore it from.
     confirm_destructive(args.yes, "empty", &format!("cart {}", args.sys_id))?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{BASE}/cart/{}/empty", args.sys_id);
     client.delete(&path, &[])?;
     Ok(())
 }
 
 pub fn checkout(global: &GlobalFlags) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let resp = client.post(
         &format!("{BASE}/cart/checkout"),
         &[],
         &serde_json::json!({}),
     )?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn submit_order(global: &GlobalFlags) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let resp = client.post(
         &format!("{BASE}/cart/submit_order"),
         &[],
         &serde_json::json!({}),
     )?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn wishlist(global: &GlobalFlags) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let resp = client.get(&format!("{BASE}/wishlist"), &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }

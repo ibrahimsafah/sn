@@ -1,4 +1,4 @@
-use crate::cli::table::{build_client, build_profile, unwrap_or_raw};
+use crate::cli::kernel::{connect, emit, unwrap_or_raw, write_response};
 use crate::cli::{GlobalFlags, OutputMode};
 use crate::client::Client;
 use crate::error::{Error, Result};
@@ -11,12 +11,10 @@ pub struct ProgressArgs {
 }
 
 pub fn run(global: &GlobalFlags, args: ProgressArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_cicd/progress/{}", args.progress_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 /// Shared tail of every async CICD command (`app`, `updateset`, `atf`): if
@@ -44,10 +42,10 @@ pub(crate) fn finish_cicd(
             .and_then(|id| id.as_str())
         {
             let final_result = wait_for_completion(client, progress_id, global, wait_timeout)?;
-            return crate::cli::table::write_response(global, &final_result);
+            return write_response(global, &final_result);
         }
     }
-    crate::cli::table::write_response(global, &out)
+    write_response(global, &out)
 }
 
 /// Poll `GET /api/sn_cicd/progress/{progress_id}` in a loop until the operation

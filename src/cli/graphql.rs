@@ -15,7 +15,7 @@
 //! stripping the `{"result": ...}` envelope; `--output raw` keeps the whole
 //! response body.
 
-use crate::cli::table::{build_client, build_profile, write_response};
+use crate::cli::kernel::{connect, write_response};
 use crate::cli::{GlobalFlags, OutputMode};
 use crate::error::{Error, Result};
 use serde_json::{Map, Value};
@@ -43,8 +43,7 @@ pub fn run(global: &GlobalFlags, args: GraphqlArgs) -> Result<()> {
     let query = read_text_input(&args.query, "query")?;
     let variables = build_variables(args.variables.as_deref(), &args.var)?;
 
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
 
     let resp = execute(&client, &query, variables, args.operation.as_deref())?;
     let errors = graphql_errors(&resp);

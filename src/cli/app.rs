@@ -1,4 +1,4 @@
-use crate::cli::table::{build_client, build_profile, confirm_destructive, unwrap_or_raw};
+use crate::cli::kernel::{confirm_destructive, connect, unwrap_or_raw};
 use crate::cli::GlobalFlags;
 use crate::error::{Error, Result};
 use clap::Subcommand;
@@ -88,8 +88,7 @@ pub fn install(global: &GlobalFlags, args: AppInstallArgs) -> Result<()> {
             "either --sys-id or --scope is required".into(),
         ));
     }
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.sys_id {
         query.push(("sys_id".into(), v));
@@ -121,8 +120,7 @@ pub fn publish(global: &GlobalFlags, args: AppPublishArgs) -> Result<()> {
             "either --sys-id or --scope is required".into(),
         ));
     }
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.sys_id {
         query.push(("sys_id".into(), v));
@@ -162,8 +160,7 @@ pub fn rollback(global: &GlobalFlags, args: AppRollbackArgs) -> Result<()> {
         "roll back",
         &format!("{target} to version {}", args.version),
     )?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.sys_id {
         query.push(("sys_id".into(), v));

@@ -1,7 +1,5 @@
 use crate::body::{build_body, BodyInput};
-use crate::cli::table::{
-    build_client, build_profile, confirm_delete, confirm_destructive, unwrap_or_raw,
-};
+use crate::cli::kernel::{confirm_delete, confirm_destructive, connect, emit};
 use crate::cli::{DisplayValueArg, GlobalFlags, ADVANCED};
 use crate::error::{Error, Result};
 use clap::{Subcommand, ValueEnum};
@@ -362,8 +360,7 @@ fn base_path(ct: Option<ChangeType>) -> &'static str {
 }
 
 pub fn list(global: &GlobalFlags, args: ChangeListArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = base_path(args.r#type);
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.query {
@@ -387,13 +384,11 @@ pub fn list(global: &GlobalFlags, args: ChangeListArgs) -> Result<()> {
         query.push(("sysparm_view".into(), v));
     }
     let resp = client.get(path, &query)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn get(global: &GlobalFlags, args: ChangeGetArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{}/{}", base_path(args.r#type), args.sys_id);
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.fields {
@@ -410,13 +405,11 @@ pub fn get(global: &GlobalFlags, args: ChangeGetArgs) -> Result<()> {
         query.push(("sysparm_view".into(), v));
     }
     let resp = client.get(&path, &query)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn create(global: &GlobalFlags, args: ChangeCreateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = match args.r#type {
         ChangeType::Standard => {
             let tmpl = args
@@ -443,13 +436,11 @@ pub fn create(global: &GlobalFlags, args: ChangeCreateArgs) -> Result<()> {
         query.push(("sysparm_display_value".into(), dv.as_str().into()));
     }
     let resp = client.post(&path, &query, &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn update(global: &GlobalFlags, args: ChangeUpdateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{}/{}", base_path(args.r#type), args.sys_id);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -468,31 +459,26 @@ pub fn update(global: &GlobalFlags, args: ChangeUpdateArgs) -> Result<()> {
         query.push(("sysparm_display_value".into(), dv.as_str().into()));
     }
     let resp = client.patch(&path, &query, &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn delete(global: &GlobalFlags, args: ChangeDeleteArgs) -> Result<()> {
     confirm_delete(args.yes, &format!("change {}", args.sys_id))?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("{}/{}", base_path(args.r#type), args.sys_id);
     client.delete(&path, &[])?;
     Ok(())
 }
 
 pub fn nextstates(global: &GlobalFlags, args: ChangeSysIdArg) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/nextstates", args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn approvals(global: &GlobalFlags, args: ChangeApprovalsArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/approvals", args.sys_id);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -503,13 +489,11 @@ pub fn approvals(global: &GlobalFlags, args: ChangeApprovalsArgs) -> Result<()> 
     };
     let body = build_body(body_input)?;
     let resp = client.patch(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn risk(global: &GlobalFlags, args: ChangeRiskArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/risk", args.sys_id);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -520,41 +504,34 @@ pub fn risk(global: &GlobalFlags, args: ChangeRiskArgs) -> Result<()> {
     };
     let body = build_body(body_input)?;
     let resp = client.patch(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn schedule(global: &GlobalFlags, args: ChangeSysIdArg) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/schedule", args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn models(global: &GlobalFlags, args: ChangeOptionalIdArg) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = match args.sys_id {
         Some(id) => format!("/api/sn_chg_rest/change/model/{id}"),
         None => "/api/sn_chg_rest/change/model".to_string(),
     };
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn templates(global: &GlobalFlags, args: ChangeOptionalIdArg) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = match args.sys_id {
         Some(id) => format!("/api/sn_chg_rest/change/standard/template/{id}"),
         None => "/api/sn_chg_rest/change/standard/template".to_string(),
     };
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn task(global: &GlobalFlags, sub: ChangeTaskSub) -> Result<()> {
@@ -568,8 +545,7 @@ pub fn task(global: &GlobalFlags, sub: ChangeTaskSub) -> Result<()> {
 }
 
 fn task_list(global: &GlobalFlags, args: ChangeTaskListArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/task", args.change_sys_id);
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.fields {
@@ -577,25 +553,21 @@ fn task_list(global: &GlobalFlags, args: ChangeTaskListArgs) -> Result<()> {
     }
     query.push(("sysparm_limit".into(), args.setlimit.to_string()));
     let resp = client.get(&path, &query)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 fn task_get(global: &GlobalFlags, args: ChangeTaskGetArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!(
         "/api/sn_chg_rest/change/{}/task/{}",
         args.change_sys_id, args.task_sys_id
     );
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 fn task_create(global: &GlobalFlags, args: ChangeTaskCreateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/task", args.change_sys_id);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -606,13 +578,11 @@ fn task_create(global: &GlobalFlags, args: ChangeTaskCreateArgs) -> Result<()> {
     };
     let body = build_body(body_input)?;
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 fn task_update(global: &GlobalFlags, args: ChangeTaskUpdateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!(
         "/api/sn_chg_rest/change/{}/task/{}",
         args.change_sys_id, args.task_sys_id
@@ -626,8 +596,7 @@ fn task_update(global: &GlobalFlags, args: ChangeTaskUpdateArgs) -> Result<()> {
     };
     let body = build_body(body_input)?;
     let resp = client.patch(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 fn task_delete(global: &GlobalFlags, args: ChangeTaskDeleteArgs) -> Result<()> {
@@ -635,8 +604,7 @@ fn task_delete(global: &GlobalFlags, args: ChangeTaskDeleteArgs) -> Result<()> {
         args.yes,
         &format!("task {} on change {}", args.task_sys_id, args.change_sys_id),
     )?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!(
         "/api/sn_chg_rest/change/{}/task/{}",
         args.change_sys_id, args.task_sys_id
@@ -653,17 +621,14 @@ pub fn ci(global: &GlobalFlags, sub: ChangeCiSub) -> Result<()> {
 }
 
 fn ci_list(global: &GlobalFlags, args: ChangeSysIdArg) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/ci", args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 fn ci_add(global: &GlobalFlags, args: ChangeCiAddArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/ci", args.change_sys_id);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -674,8 +639,7 @@ fn ci_add(global: &GlobalFlags, args: ChangeCiAddArgs) -> Result<()> {
     };
     let body = build_body(body_input)?;
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn conflict(global: &GlobalFlags, sub: ChangeConflictSub) -> Result<()> {
@@ -687,17 +651,14 @@ pub fn conflict(global: &GlobalFlags, sub: ChangeConflictSub) -> Result<()> {
 }
 
 fn conflict_get(global: &GlobalFlags, args: ChangeSysIdArg) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/conflict", args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 fn conflict_add(global: &GlobalFlags, args: ChangeConflictAddArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/conflict", args.sys_id);
     let body_input = if let Some(d) = args.data {
         BodyInput::Data(d)
@@ -708,8 +669,7 @@ fn conflict_add(global: &GlobalFlags, args: ChangeConflictAddArgs) -> Result<()>
     };
     let body = build_body(body_input)?;
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 fn conflict_remove(global: &GlobalFlags, args: ChangeConflictRemoveArgs) -> Result<()> {
@@ -722,8 +682,7 @@ fn conflict_remove(global: &GlobalFlags, args: ChangeConflictRemoveArgs) -> Resu
         "remove",
         &format!("all conflicts on change {}", args.sys_id),
     )?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/conflict", args.sys_id);
     client.delete(&path, &[])?;
     Ok(())

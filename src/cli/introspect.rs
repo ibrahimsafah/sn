@@ -3,7 +3,7 @@ use crate::error::Result;
 use clap::{Arg, ArgAction, Command as ClapCommand};
 use serde_json::{json, Value};
 
-use super::table::write_response;
+use super::kernel::write_response;
 
 pub fn run(global: &GlobalFlags) -> Result<()> {
     // Via cli::command(), not Cli::command(), so this describes the same tree

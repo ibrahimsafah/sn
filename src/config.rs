@@ -357,9 +357,33 @@ instance = "dev.example.com"
 /// is created once and never renamed over has a stable identity to lock.
 ///
 /// One lock covers the whole directory rather than one per file. The two files
-/// are written as a pair (adding a profile touches both), so per-file locks
-/// would let a reader observe a profile that exists in one and not the other;
-/// a single lock also means there is no lock ordering, and so no deadlock.
+/// are written as a pair (adding a profile touches both), and one lock lets a
+/// writer hold the pair together for the whole read → modify → write — see
+/// [`with_config_lock`], which is how `sn profile add` and friends stay atomic
+/// as a pair. A single lock also means there is no lock ordering, and so no
+/// deadlock.
+///
+/// **Readers take no lock**, and that is deliberate: every `sn` invocation
+/// reads the config, and making each one contend with writers would trade a
+/// rare lost update for a common stall. Instead, *write ordering* is what keeps
+/// an unlocked reader honest. Readers load `config.toml` first and
+/// `credentials.toml` second (`cli::table::build_profile`), and the one state
+/// that hurts them is a config entry whose credentials have not landed —
+/// `resolve_profile` then hands back `Auth::Basic("", "")` and the caller gets a
+/// baffling 401. So writers go the opposite way round:
+///
+/// * **Adding** writes `credentials.toml`, then `config.toml`. A reader that
+///   sees the new config entry read it *after* the credentials rename, so it is
+///   guaranteed to see the credentials too — the interleaving that breaks is
+///   arithmetically impossible, not merely unlikely. In between, the profile
+///   simply reads as not existing yet.
+/// * **Removing** writes `config.toml`, then `credentials.toml`, so a reader
+///   that runs entirely inside the gap sees the profile already gone rather
+///   than present-but-credential-less. This one is narrower rather than
+///   airtight: a reader whose two loads straddle *both* renames can still
+///   catch the bad pair. Closing that last window needs a shared read lock on
+///   the reader side; the residue is a two-`read(2)` window around a delete of
+///   the very profile being read, so it has not earned that cost.
 const LOCK_FILE: &str = ".sn.lock";
 
 /// How long a write waits for the lock before giving up. Every critical section
@@ -388,16 +412,24 @@ struct DirLock {
 
 impl DirLock {
     fn acquire(dir: &Path) -> Result<Self> {
+        Self::acquire_for(dir, LOCK_TIMEOUT)
+    }
+
+    fn acquire_for(dir: &Path, timeout: Duration) -> Result<Self> {
         fs::create_dir_all(dir)
             .map_err(|e| Error::Config(format!("mkdir {}: {e}", dir.display())))?;
         // Canonicalized (after the mkdir, so it can succeed) because the
         // re-entrancy record is keyed by path: two spellings of one directory —
         // `cfg` vs `./cfg`, or either side of a symlink — would otherwise look
         // like different locks, and the inner acquisition would block on the
-        // outer one's own flock until LOCK_TIMEOUT.
+        // outer one's own flock until the timeout.
         let dir = dir.canonicalize().unwrap_or_else(|_| dir.to_path_buf());
         let held = HELD_LOCKS.with(|h| h.borrow().contains(&dir));
-        let file = if held { None } else { Some(lock_dir(&dir)?) };
+        let file = if held {
+            None
+        } else {
+            Some(lock_dir(&dir, timeout)?)
+        };
         HELD_LOCKS.with(|h| h.borrow_mut().push(dir.clone()));
         Ok(DirLock { dir, _file: file })
     }
@@ -416,7 +448,7 @@ impl Drop for DirLock {
     }
 }
 
-fn lock_dir(dir: &Path) -> Result<File> {
+fn lock_dir(dir: &Path, timeout: Duration) -> Result<File> {
     let path = dir.join(LOCK_FILE);
     let file = OpenOptions::new()
         .create(true)
@@ -426,7 +458,7 @@ fn lock_dir(dir: &Path) -> Result<File> {
         .open(&path)
         .map_err(|e| Error::Config(format!("open {}: {e}", path.display())))?;
 
-    let deadline = Instant::now() + LOCK_TIMEOUT;
+    let deadline = Instant::now() + timeout;
     let mut backoff = Duration::from_millis(1);
     loop {
         // Spelled as a trait call, not `file.try_lock()`: Rust 1.89 stabilized an
@@ -442,7 +474,7 @@ fn lock_dir(dir: &Path) -> Result<File> {
         if Instant::now() >= deadline {
             return Err(Error::Config(format!(
                 "timed out after {}s waiting for the config lock at {}; another sn process is holding it",
-                LOCK_TIMEOUT.as_secs(),
+                timeout.as_secs(),
                 path.display()
             )));
         }
@@ -467,8 +499,23 @@ fn lock_dir_of(path: &Path) -> &Path {
 /// nothing about two processes that each read the old file first. Re-entrant
 /// within a thread, so the inner `save_*` call is free.
 pub fn with_config_lock<T>(f: impl FnOnce() -> Result<T>) -> Result<T> {
+    with_config_lock_for(LOCK_TIMEOUT, f)
+}
+
+/// [`with_config_lock`] with a caller-chosen acquisition timeout.
+///
+/// The default [`LOCK_TIMEOUT`] is sized for the only thing writers normally do
+/// under the lock: parse, mutate, write. One critical section is not that shape
+/// — `oauth::ensure_access_token` holds the lock across the `/oauth_token.do`
+/// round trip, because a refresh-token rotation makes a *duplicated* refresh
+/// worse than a serialized one (the loser presents an already-consumed refresh
+/// token and gets a 401). A waiter there has to out-wait a holder that is
+/// blocked on the network, so it passes the HTTP timeout plus the usual slack;
+/// with the default 10s every parallel invocation would instead fail with a
+/// spurious lock timeout the moment the IdP got slow.
+pub fn with_config_lock_for<T>(timeout: Duration, f: impl FnOnce() -> Result<T>) -> Result<T> {
     let dir = config_dir()?;
-    let _guard = DirLock::acquire(&dir)?;
+    let _guard = DirLock::acquire_for(&dir, timeout)?;
     f()
 }
 
@@ -515,9 +562,24 @@ fn new_temp_file(dir: &Path) -> Result<tempfile::NamedTempFile> {
 ///
 /// The bytes land in a temp file **in the same directory** — `rename(2)` is only
 /// atomic within a single filesystem, so a temp file under `/tmp` would be a
-/// copy, not a rename. `sync_all` before the rename is what makes the crash
-/// outcome "the old file or the new file" instead of a rename pointing at blocks
-/// that were never written.
+/// copy, not a rename.
+///
+/// Crash-durability takes two fsyncs, and each covers a different half:
+///
+/// * `sync_all` on the temp file **before** the rename forces the contents out,
+///   so the rename cannot publish a name pointing at blocks that were never
+///   written. Without it the crash outcome would be "the old file, the new
+///   file, or the new file full of zeroes".
+/// * `fsync` on the containing **directory** after the rename forces the
+///   directory entry out, so the rename itself cannot be lost. Without it the
+///   *content* is safe but the rename is not durable, and a crash can roll the
+///   whole write back to the old file — that is a legal outcome for us, but it
+///   means "saved" was reported for a write that then vanished, which for a
+///   password prompt is worth one extra fsync to avoid.
+///
+/// Directory fsync is Unix-only: on Windows a directory cannot be opened as a
+/// file, and `MoveFileEx`'s metadata ordering is the filesystem's problem
+/// rather than something a caller can force.
 ///
 /// The replacement carries the temp file's 0600 mode onto the destination, which
 /// also repairs a `credentials.toml` left 0644 by an older release.
@@ -532,8 +594,23 @@ fn write_atomic(path: &Path, contents: &str) -> Result<()> {
         .map_err(|e| Error::Config(format!("sync {}: {e}", path.display())))?;
     tmp.persist(path)
         .map_err(|e| Error::Config(format!("replace {}: {}", path.display(), e.error)))?;
+    sync_dir(dir);
     Ok(())
 }
+
+/// `fsync` a directory so a rename into it is durable. Best-effort: a
+/// filesystem that refuses (some network mounts return `EINVAL`) does not make
+/// the write any less *atomic*, which is the property this module promises, so
+/// failing the whole save over it would be worse than the durability it buys.
+#[cfg(unix)]
+fn sync_dir(dir: &Path) {
+    if let Ok(d) = File::open(dir) {
+        let _ = d.sync_all();
+    }
+}
+
+#[cfg(not(unix))]
+fn sync_dir(_dir: &Path) {}
 
 pub fn load_config_from(path: &std::path::Path) -> Result<Config> {
     if !path.exists() {
@@ -779,6 +856,21 @@ pub fn save_oauth_tokens(profile_name: &str, tokens: &TokenSet) -> Result<()> {
             .oauth_tokens = Some(tokens.clone());
         Ok(())
     })
+}
+
+/// Re-read `profile_name`'s cached OAuth tokens straight from disk.
+///
+/// A `ResolvedProfile`'s tokens are a snapshot taken when the invocation
+/// started; this is how `oauth::ensure_access_token` finds out, from inside the
+/// write lock, whether a sibling process has landed a fresher token since. A
+/// missing file or profile is `None`, not an error — that is just "no token
+/// cached".
+pub fn load_oauth_tokens(profile_name: &str) -> Result<Option<TokenSet>> {
+    let creds = load_credentials_from(&credentials_path()?)?;
+    Ok(creds
+        .profiles
+        .get(profile_name)
+        .and_then(|p| p.oauth_tokens.clone()))
 }
 
 /// Drop any cached OAuth tokens for `profile_name` (used by `sn auth logout`).

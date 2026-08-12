@@ -413,6 +413,28 @@ pub fn login_authorization_code_with(
 /// Return a valid bearer access token for an OAuth profile, refreshing or
 /// minting one as needed and persisting any new tokens. This is the chokepoint
 /// `build_client` calls before every API request.
+///
+/// A refresh is **single-flight across processes**. The naive shape — read the
+/// cached token, refresh it over the network, then write — is not merely
+/// wasteful when N agent invocations wake up together on one expired token: on
+/// an instance with refresh-token rotation it is a hard failure. Each of them
+/// presents the same refresh token RT0; the first gets RT1 and persists it, and
+/// every other one presents an RT0 the IdP has already consumed, gets a 401, and
+/// exits 4 telling the user to log in again — seconds after a perfectly good
+/// token was minted. So the whole read → refresh → write runs under the config
+/// lock, and the staleness check is repeated *inside* it: whoever arrives second
+/// re-reads the file, finds the token a sibling just wrote, and returns it
+/// without touching the network at all.
+///
+/// The cost is that the lock is held across an HTTP round trip, which serializes
+/// every concurrent invocation of `sn` behind one token fetch. That is the right
+/// trade — the alternative is a real authentication failure, and the wait is
+/// bounded by the same timeout the request itself has — but it does mean the
+/// usual 10s lock timeout is too tight, so this call passes a budget derived
+/// from the HTTP timeout instead (see [`refresh_lock_timeout`]).
+///
+/// The fast path (cached token still valid) takes no lock and does no I/O, so
+/// the common case pays nothing for any of this.
 pub fn ensure_access_token(profile: &ResolvedProfile, timeout: Option<u64>) -> Result<String> {
     let o = profile
         .oauth
@@ -423,59 +445,103 @@ pub fn ensure_access_token(profile: &ResolvedProfile, timeout: Option<u64>) -> R
         if !tok.is_expired(REFRESH_SKEW_SECS) {
             return Ok(tok.access_token.clone());
         }
-        if let Some(rt) = &tok.refresh_token {
+    }
+
+    config::with_config_lock_for(refresh_lock_timeout(timeout), || {
+        // Re-read under the lock. `o.tokens` is this invocation's snapshot from
+        // before it started waiting; the file is the truth now.
+        let cached = config::load_oauth_tokens(&profile.name)?;
+        if let Some(tok) = &cached {
+            if !tok.is_expired(REFRESH_SKEW_SECS) {
+                return Ok(tok.access_token.clone());
+            }
+        }
+
+        // Likewise prefer the on-disk refresh token: under rotation, ours may
+        // already have been spent and replaced by whoever held the lock last.
+        let rt = cached
+            .as_ref()
+            .and_then(|t| t.refresh_token.clone())
+            .or_else(|| o.tokens.as_ref().and_then(|t| t.refresh_token.clone()));
+        if let Some(rt) = rt {
             let client = build_token_client(profile, timeout)?;
-            let fresh = refresh(&client, o, rt)?;
+            let fresh = refresh(&client, o, &rt)?;
             config::save_oauth_tokens(&profile.name, &fresh)?;
             return Ok(fresh.access_token);
         }
-    }
 
-    // No cached token (or it expired without a refresh token). The
-    // client-credentials grant can mint one non-interactively.
-    if matches!(o.grant, OAuthGrant::ClientCredentials) {
-        let client = build_token_client(profile, timeout)?;
-        let fresh = client_credentials(&client, o)?;
-        config::save_oauth_tokens(&profile.name, &fresh)?;
-        return Ok(fresh.access_token);
-    }
+        // No cached token (or it expired without a refresh token). The
+        // client-credentials grant can mint one non-interactively.
+        if matches!(o.grant, OAuthGrant::ClientCredentials) {
+            let client = build_token_client(profile, timeout)?;
+            let fresh = client_credentials(&client, o)?;
+            config::save_oauth_tokens(&profile.name, &fresh)?;
+            return Ok(fresh.access_token);
+        }
 
-    Err(Error::Auth {
-        status: 401,
-        message: format!(
-            "no valid OAuth token for profile '{}'; run `sn auth login`",
-            profile.name
-        ),
-        transaction_id: None,
+        Err(Error::Auth {
+            status: 401,
+            message: format!(
+                "no valid OAuth token for profile '{}'; run `sn auth login`",
+                profile.name
+            ),
+            transaction_id: None,
+        })
     })
 }
 
+/// The `Client` builder's default request timeout, mirrored from `client.rs`.
+/// Only used to size a lock budget, so drift costs a slightly wrong wait rather
+/// than a wrong request.
+const DEFAULT_HTTP_TIMEOUT_SECS: u64 = 30;
+
+/// Extra slack over the HTTP timeout, so a waiter still out-waits a holder that
+/// used its entire request budget before giving up.
+const REFRESH_LOCK_SLACK: Duration = Duration::from_secs(10);
+
+/// How long to wait for the config lock when a token refresh may be in flight.
+///
+/// The lock's usual 10s budget assumes the holder is doing a parse and a small
+/// write. Here the holder is blocked on the IdP, so the waiter has to be willing
+/// to wait out the holder's own request timeout — otherwise a slow IdP turns
+/// every parallel invocation into a spurious "timed out waiting for the config
+/// lock" (exit 1), which is a worse failure than the one single-flight fixed.
+fn refresh_lock_timeout(timeout: Option<u64>) -> Duration {
+    Duration::from_secs(timeout.unwrap_or(DEFAULT_HTTP_TIMEOUT_SECS))
+        .saturating_add(REFRESH_LOCK_SLACK)
+}
+
 /// Force a token refresh now (for `sn auth refresh`), persisting the result.
+///
+/// Locked like [`ensure_access_token`] so it cannot race a refresh happening
+/// underneath it, but with no staleness re-check: "force" means force, and the
+/// user typed it.
 pub fn force_refresh(profile: &ResolvedProfile, timeout: Option<u64>) -> Result<TokenSet> {
     let o = profile
         .oauth
         .as_ref()
         .ok_or_else(|| Error::Config("profile is not configured for oauth".into()))?;
-    let client = build_token_client(profile, timeout)?;
-    let fresh = if matches!(o.grant, OAuthGrant::ClientCredentials) {
-        client_credentials(&client, o)?
-    } else {
-        let rt = o
-            .tokens
-            .as_ref()
-            .and_then(|t| t.refresh_token.as_ref())
-            .ok_or_else(|| Error::Auth {
-                status: 401,
-                message: format!(
-                    "no refresh token for profile '{}'; run `sn auth login`",
-                    profile.name
-                ),
-                transaction_id: None,
-            })?;
-        refresh(&client, o, rt)?
-    };
-    config::save_oauth_tokens(&profile.name, &fresh)?;
-    Ok(fresh)
+    config::with_config_lock_for(refresh_lock_timeout(timeout), || {
+        let client = build_token_client(profile, timeout)?;
+        let fresh = if matches!(o.grant, OAuthGrant::ClientCredentials) {
+            client_credentials(&client, o)?
+        } else {
+            let rt = config::load_oauth_tokens(&profile.name)?
+                .and_then(|t| t.refresh_token)
+                .or_else(|| o.tokens.as_ref().and_then(|t| t.refresh_token.clone()))
+                .ok_or_else(|| Error::Auth {
+                    status: 401,
+                    message: format!(
+                        "no refresh token for profile '{}'; run `sn auth login`",
+                        profile.name
+                    ),
+                    transaction_id: None,
+                })?;
+            refresh(&client, o, &rt)?
+        };
+        config::save_oauth_tokens(&profile.name, &fresh)?;
+        Ok(fresh)
+    })
 }
 
 #[cfg(test)]

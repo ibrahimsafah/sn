@@ -2,8 +2,8 @@ use crate::cli::auth::{complete_oauth_login, whoami};
 use crate::cli::table::{build_client, build_profile, write_response};
 use crate::cli::GlobalFlags;
 use crate::config::{
-    config_path, credentials_path, default_redirect_uri, load_config_from, load_credentials_from,
-    resolve_profile_name, save_config_to, save_credentials_to, AuthMethod, Config, Credentials,
+    self, config_path, credentials_path, default_redirect_uri, load_config_from,
+    load_credentials_from, resolve_profile_name, save_config_to, save_credentials_to, AuthMethod,
     OAuthConfig, OAuthGrant, ProfileConfig, ProfileCredentials,
 };
 use crate::error::{Error, Result};
@@ -135,11 +135,26 @@ pub(crate) struct ProfileInput {
     pub pkce: bool,
 }
 
-/// The config files as they were before a write, so a profile that fails
-/// verification can be rolled back off disk.
+/// What one [`save_profile`] displaced, so [`restore`] can put back exactly
+/// that much when verification fails.
+///
+/// Deliberately **not** a copy of both whole files. Verification is a network
+/// round trip, so the rollback lands some seconds after the write; restoring
+/// two entire files would then stomp any profile a sibling `sn` invocation
+/// added in between — trading one dead profile for someone else's live one.
+/// Only the entry this run touched is reverted, and `default_profile` only if
+/// this run is still the one holding it.
 pub(crate) struct Snapshot {
-    config: Config,
-    credentials: Credentials,
+    /// The profile this run wrote.
+    name: String,
+    /// Its `config.toml` entry beforehand; `None` if it did not exist.
+    config: Option<ProfileConfig>,
+    /// Its `credentials.toml` entry beforehand; `None` if it did not exist.
+    credentials: Option<ProfileCredentials>,
+    /// `default_profile` beforehand — only consulted when `claimed_default`.
+    prior_default: Option<String>,
+    /// Whether this run pointed `default_profile` at `name`.
+    claimed_default: bool,
 }
 
 /// True when there is a human on the other end of stdin to prompt.
@@ -314,14 +329,57 @@ pub(crate) fn resolve_input(args: &ProfileAddArgs, name: String) -> Result<Profi
 /// what this run configures, so fields neither command can set — proxy
 /// credentials, OAuth endpoint overrides — survive. Returns the prior state for
 /// [`restore`].
-fn save_profile(global: &GlobalFlags, input: &ProfileInput, set_default: bool) -> Result<Snapshot> {
+///
+/// The entire read → modify → write runs inside `with_config_lock`. Locking
+/// only the two `save_*` calls would not help at all: two `sn profile add`
+/// invocations would each read the same old config, each add their own profile
+/// to it, and each write their copy back — the second erasing the first. That
+/// is not theoretical, it is what twelve parallel adds did before this lock
+/// (one survivor, eleven silent losses, all twelve exiting 0).
+///
+/// `credentials.toml` is written **first**, `config.toml` second, because
+/// readers hold no lock and profile resolution is keyed off `config.toml`: a
+/// reader between the two renames must not find a config entry whose
+/// credentials have not landed, which would resolve to an empty
+/// username/password and a baffling 401. The other order is harmless — the
+/// profile simply reads as not yet existing.
+fn save_profile(
+    global: &GlobalFlags,
+    input: &ProfileInput,
+    set_default: bool,
+    refuse_existing: bool,
+) -> Result<Snapshot> {
+    config::with_config_lock(|| save_profile_locked(global, input, set_default, refuse_existing))
+}
+
+fn save_profile_locked(
+    global: &GlobalFlags,
+    input: &ProfileInput,
+    set_default: bool,
+    refuse_existing: bool,
+) -> Result<Snapshot> {
     let cfg_path = config_path()?;
     let cred_path = credentials_path()?;
     let mut config = load_config_from(&cfg_path)?;
     let mut creds = load_credentials_from(&cred_path)?;
+
+    // `sn profile add`'s refusal to clobber is re-checked here, under the lock,
+    // and not only in `add` before prompting: that earlier check reads the file
+    // and then spends a prompt's worth of time before writing, so on its own it
+    // would let two concurrent adds of one name both decide the name was free.
+    if refuse_existing && config.profiles.contains_key(&input.name) {
+        return Err(Error::Usage(format!(
+            "profile '{}' already exists; pass --force to overwrite it",
+            input.name
+        )));
+    }
+
     let snapshot = Snapshot {
-        config: config.clone(),
-        credentials: creds.clone(),
+        name: input.name.clone(),
+        config: config.profiles.get(&input.name).cloned(),
+        credentials: creds.profiles.get(&input.name).cloned(),
+        prior_default: config.default_profile.clone(),
+        claimed_default: set_default,
     };
 
     let mut pc: ProfileConfig = config
@@ -384,15 +442,52 @@ fn save_profile(global: &GlobalFlags, input: &ProfileInput, set_default: bool) -
     }
     config.profiles.insert(input.name.clone(), pc);
     creds.profiles.insert(input.name.clone(), cred);
-    save_config_to(&cfg_path, &config)?;
     save_credentials_to(&cred_path, &creds)?;
+    save_config_to(&cfg_path, &config)?;
     Ok(snapshot)
 }
 
-/// Put the config files back the way [`save_profile`] found them.
+/// Undo one [`save_profile`], touching only what it wrote.
+///
+/// Re-reads both files under the lock rather than replaying a whole-file
+/// snapshot, so a profile some other invocation added while this one was
+/// verifying survives the rollback. `default_profile` goes back only if it is
+/// still pointing at the profile this run claimed it for — otherwise somebody
+/// ran `sn profile use` in the meantime and their choice wins.
+///
+/// Write order is the mirror of `save_profile`'s: `config.toml` first, so the
+/// window an unlocked reader can catch shows the profile already gone from
+/// config rather than present with its credentials removed.
 fn restore(snap: &Snapshot) -> Result<()> {
-    save_config_to(&config_path()?, &snap.config)?;
-    save_credentials_to(&credentials_path()?, &snap.credentials)
+    config::with_config_lock(|| {
+        let cfg_path = config_path()?;
+        let cred_path = credentials_path()?;
+        let mut config = load_config_from(&cfg_path)?;
+        let mut creds = load_credentials_from(&cred_path)?;
+
+        match &snap.config {
+            Some(pc) => {
+                config.profiles.insert(snap.name.clone(), pc.clone());
+            }
+            None => {
+                config.profiles.remove(&snap.name);
+            }
+        }
+        match &snap.credentials {
+            Some(cred) => {
+                creds.profiles.insert(snap.name.clone(), cred.clone());
+            }
+            None => {
+                creds.profiles.remove(&snap.name);
+            }
+        }
+        if snap.claimed_default && config.default_profile.as_deref() == Some(snap.name.as_str()) {
+            config.default_profile = snap.prior_default.clone();
+        }
+
+        save_config_to(&cfg_path, &config)?;
+        save_credentials_to(&cred_path, &creds)
+    })
 }
 
 /// Prove a freshly-saved profile actually authenticates, returning the
@@ -421,17 +516,34 @@ fn verify_profile(
     }
 }
 
-/// Persist `input`, then prove it works — rolling the files back if it doesn't,
+/// The three policies that separate `sn init` from `sn profile add`, in the one
+/// place both funnel through.
+pub(crate) struct SavePolicy {
+    /// Point `default_profile` at this profile.
+    pub set_default: bool,
+    /// Prove the credentials authenticate, and roll back if they don't.
+    pub verify: bool,
+    /// Fail rather than overwrite an existing profile.
+    pub refuse_existing: bool,
+}
+
+/// Persist `input`, then prove it works — rolling the write back if it doesn't,
 /// so a profile that cannot authenticate never survives on disk. An unverified
 /// profile is worse than no profile: it fails later, somewhere confusing.
+///
+/// Verification runs *outside* the config lock on purpose. It is a network
+/// round trip (and for `authorization_code`, a browser and a human), so holding
+/// the lock across it would park every other `sn` invocation on this machine
+/// behind an SSO prompt until the 10s lock timeout fired. What makes that safe
+/// is that the rollback is per-profile rather than a whole-file snapshot; see
+/// [`restore`].
 pub(crate) fn save_and_verify(
     global: &GlobalFlags,
     input: &ProfileInput,
-    set_default: bool,
-    verify: bool,
+    policy: SavePolicy,
 ) -> Result<Option<String>> {
-    let snapshot = save_profile(global, input, set_default)?;
-    if !verify {
+    let snapshot = save_profile(global, input, policy.set_default, policy.refuse_existing)?;
+    if !policy.verify {
         return Ok(None);
     }
     match verify_profile(global, &input.name, input.auth, input.grant) {
@@ -546,7 +658,15 @@ fn add(global: &GlobalFlags, args: ProfileAddArgs) -> Result<()> {
         )));
     }
 
-    let user = save_and_verify(global, &input, args.set_default, !args.no_verify)?;
+    let user = save_and_verify(
+        global,
+        &input,
+        SavePolicy {
+            set_default: args.set_default,
+            verify: !args.no_verify,
+            refuse_existing: !args.force,
+        },
+    )?;
 
     let mut out = json!({
         "ok": true,
@@ -640,30 +760,46 @@ fn show(global: &GlobalFlags, name: Option<String>) -> Result<()> {
     write_response(global, &out)
 }
 
+/// `sn profile remove` — drop a profile from both files under one lock.
+///
+/// `config.toml` goes first, the mirror of `save_profile`'s order: an unlocked
+/// reader that runs between the renames sees the profile already absent from
+/// config, which resolves as "not found", rather than present with its
+/// credentials already gone. See `config::LOCK_FILE` for why that is narrower
+/// than the guarantee `save_profile` gets.
 fn remove(name: String) -> Result<()> {
-    let cfg_path = config_path()?;
-    let cred_path = credentials_path()?;
-    let mut cfg = load_config_from(&cfg_path)?;
-    let mut creds = load_credentials_from(&cred_path)?;
-    cfg.profiles.remove(&name);
-    creds.profiles.remove(&name);
-    if cfg.default_profile.as_deref() == Some(&name) {
-        cfg.default_profile = None;
-    }
-    save_config_to(&cfg_path, &cfg)?;
-    save_credentials_to(&cred_path, &creds)?;
-    Ok(())
+    config::with_config_lock(|| {
+        let cfg_path = config_path()?;
+        let cred_path = credentials_path()?;
+        let mut cfg = load_config_from(&cfg_path)?;
+        let mut creds = load_credentials_from(&cred_path)?;
+        cfg.profiles.remove(&name);
+        creds.profiles.remove(&name);
+        if cfg.default_profile.as_deref() == Some(&name) {
+            cfg.default_profile = None;
+        }
+        save_config_to(&cfg_path, &cfg)?;
+        save_credentials_to(&cred_path, &creds)?;
+        Ok(())
+    })
 }
 
+/// `sn profile use` — repoint `default_profile`.
+///
+/// One file, but still a read → modify → write: without the lock it would
+/// happily write back a `config.toml` it read before a concurrent
+/// `sn profile add` landed, deleting that profile.
 fn set_default(name: String) -> Result<()> {
-    let cfg_path = config_path()?;
-    let mut cfg = load_config_from(&cfg_path)?;
-    if !cfg.profiles.contains_key(&name) {
-        return Err(Error::Usage(format!("profile '{name}' not found")));
-    }
-    cfg.default_profile = Some(name);
-    save_config_to(&cfg_path, &cfg)?;
-    Ok(())
+    config::with_config_lock(|| {
+        let cfg_path = config_path()?;
+        let mut cfg = load_config_from(&cfg_path)?;
+        if !cfg.profiles.contains_key(&name) {
+            return Err(Error::Usage(format!("profile '{name}' not found")));
+        }
+        cfg.default_profile = Some(name);
+        save_config_to(&cfg_path, &cfg)?;
+        Ok(())
+    })
 }
 
 #[cfg(test)]

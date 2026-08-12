@@ -104,6 +104,16 @@ sn journal incident <sys_id> --source table   # exact sys_journal_field rows (UT
 
 Default `--source record` parses the record's rendered journal stream (works for any role that can read the record; timestamps in the caller's timezone/format). `sys_journal_field` itself is ACL-locked for non-admin roles — with `--source table` the count leaks but rows come back empty, and the command errors naming the cause instead of emitting `[]`. To *add* an entry: `sn table update incident <sys_id> --field work_notes="..."`.
 
+## Catalog variables (read + verified write)
+
+```bash
+sn variables get sc_req_item <sys_id>                        # [{name, label, value}] sorted by name
+sn variables get incident <sys_id>                           # record-producer answers (question_answer)
+sn variables set sc_req_item <sys_id> --field acrobat=true   # write + verify; repeatable --field, or --data '{...}'
+```
+
+Writes go through the undocumented `PUT /api/sn_sc/servicecatalog/variables/{table}/{sys_id}` — the only write path open to non-admin roles (direct `sc_item_option` writes are 403 for `itil`); it gates on write access to the record itself. The endpoint silently skips unknown variable names (200 with nothing written), so `set` validates names first — case-sensitive; unknown → exit 1 listing the pool, **before** any write — then re-reads after the PUT: a value that did not persist is exit 2, success reports `{updated: {name: {from, to}}, unchanged}`. An `sc_task` is resolved to its RITM automatically (`resolved_from` in the output). Multi-row variable sets are unsupported.
+
 ## Encoded query (--query)
 
 The most error-prone part of any invocation:

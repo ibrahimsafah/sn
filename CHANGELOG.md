@@ -4,6 +4,23 @@
 
 ### Added
 
+- **`sn variables get|set <TABLE> <SYS_ID>`** — catalog variables on a record, read and
+  written with verification. Reads walk whichever join holds the values
+  (`sc_item_option` via `sc_item_option_mtom` for an RITM; `question_answer` for a
+  record producer's target record) and emit `[{name, label, value}]` sorted by name.
+  Writes go through the undocumented `PUT
+  /api/sn_sc/servicecatalog/variables/{table_name}/{sys_id}` — established live as the
+  only write path open to non-admin roles (direct Table API writes to `sc_item_option`
+  are 403 for a plain `itil` user; the endpoint gates on `canWrite()` of the parent
+  record). The endpoint's failure mode is silence — unknown names, wrong case, or a
+  record that does not own the variables return 200 with nothing written — so `set`
+  validates names against a pre-flight read (unknown → exit 1 listing the pool, before
+  any write) and re-reads after the PUT: success reports `{updated: {name: {from, to}},
+  unchanged}`, a value that did not persist is exit 2 naming the keys. An `sc_task`
+  target is resolved to its `request_item` (the task does not own the RITM's variable
+  pool; a direct write would be skipped silently), reported as `resolved_from`.
+  Multi-row variable sets are unsupported.
+
 - **`sn journal <TABLE> <SYS_ID>`** — comments and work notes for one record, parsed
   into structured entries (`[{created_on, author, element, label, text}]`, newest
   first). Journal entries live in `sys_journal_field`, but that table is ACL-locked

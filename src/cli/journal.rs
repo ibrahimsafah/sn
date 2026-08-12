@@ -398,7 +398,7 @@ fn sort_newest_first(entries: &mut [Entry]) {
     }
 }
 
-fn validate_identifier(name: &str, what: &str) -> Result<()> {
+pub(crate) fn validate_identifier(name: &str, what: &str) -> Result<()> {
     let ok = !name.is_empty()
         && name
             .chars()
@@ -414,7 +414,7 @@ fn validate_identifier(name: &str, what: &str) -> Result<()> {
 
 /// sys_ids are 32-char GUIDs in practice, but the platform allows other
 /// shapes; reject only what could alter the encoded query it is spliced into.
-fn validate_sys_id(sys_id: &str) -> Result<()> {
+pub(crate) fn validate_sys_id(sys_id: &str) -> Result<()> {
     let ok = !sys_id.is_empty()
         && sys_id.len() <= 64
         && sys_id

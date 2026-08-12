@@ -65,6 +65,7 @@ src/
     raw.rs          → sn raw <method> <path> (REST passthrough for unmodeled endpoints; --header, --query, --data/--field)
     graphql.rs      → sn graphql <query> (GraphQL passthrough: POST /api/now/graphql; in-band errors → exit 2 with the array in sn_error)
     journal.rs      → sn journal <table> <sys_id> (comments/work notes parsed into entries; record-stream source by default, sys_journal_field rows via --source table)
+    variables.rs    → sn variables get/set (catalog variables on a record; set pre-validates names, writes via the undocumented sn_sc variables PUT — the one path open to itil — and re-reads to verify, since the endpoint 200s on silently-skipped names)
     completion.rs   → sn completion <shell> (clap_complete)
 ```
 

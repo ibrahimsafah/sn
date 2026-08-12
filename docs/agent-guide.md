@@ -413,6 +413,39 @@ pointing back at `--source record`, rather than emitting a misleading `[]`.
 There is no `journal add`: writing an entry is a plain field write —
 `sn table update incident <sys_id> --field work_notes="checked the router"`.
 
+## Catalog variables (`variables`)
+
+```bash
+sn variables get sc_req_item <sys_id>                        # [{name, label, value}] sorted by name
+sn variables get incident <sys_id>                           # record-producer answers
+sn variables set sc_req_item <sys_id> --field acrobat=true   # write + verify
+sn variables set sc_req_item <sys_id> --data '{"Additional_software_requirements": "..."}'
+```
+
+Reads walk whichever join holds the values: `sc_item_option` via
+`sc_item_option_mtom` for an RITM, `question_answer` (keyed by
+`table_name`/`table_sys_id`) for a record produced by a record producer.
+
+Writes go through `PUT /api/sn_sc/servicecatalog/variables/{table}/{sys_id}` —
+an undocumented scripted REST resource, but the only write path open to
+non-admin roles: direct Table API writes to `sc_item_option` are 403 for a
+plain `itil` user, while this endpoint gates on write access to the parent
+record itself. Its failure mode is silence — unknown names, wrong case, or a
+record that does not own the variables all return 200 with nothing written. So
+`set` restores the exit-code contract: it validates names against a read of the
+pool first (unknown → exit 1 listing the real names, before any write), then
+re-reads after the PUT and diffs — success reports
+`{updated: {name: {from, to}}, unchanged: {...}}`, and a value that did not
+persist (read-only variable, value normalization) is exit 2 naming the keys.
+
+Variable names are case-sensitive; values are raw (reference → sys_id,
+checkbox → `true`/`false`, dates in internal format). An `sc_task` target is
+resolved to its `request_item` automatically — the task does not own its RITM's
+variable pool, and writing to it directly would be silently skipped — with the
+hop reported as `resolved_from`. Multi-row variable sets
+(`sc_multi_row_question_answer`) are out of scope: they store row JSON, not
+per-variable values.
+
 ## Writing records (`create`, `update`, `delete`)
 
 **Body input** — two mutually exclusive ways (mixing them is exit 1):
@@ -939,6 +972,7 @@ sn table update  TABLE SYS_ID (--data ...|--field K=V ...) [same write flags]   
 sn table delete  TABLE SYS_ID [--yes] [--query-no-domain]
 sn table TABLE [SYS_ID]                                                           # verb optional: = list / = get
 sn journal TABLE SYS_ID [--comments|--work-notes] [--limit N] [--raw] [--source record|table]
+sn variables get TABLE SYS_ID                       sn variables set TABLE SYS_ID (--data JSON|@FILE|@- | --field K=V ...)
 
 sn change list [--type normal|emergency|standard] [shared list flags]
 sn change get|update|delete SYS_ID [--type ...] [--yes]     sn change create [--type ...] [--template ID] (--data|--field)

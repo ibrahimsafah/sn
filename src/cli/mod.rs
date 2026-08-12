@@ -23,6 +23,7 @@ pub mod scores;
 pub mod table;
 pub mod update_set;
 pub mod user;
+pub mod variables;
 pub mod watch;
 
 pub use aggregate::AggregateArgs;
@@ -70,6 +71,7 @@ pub use update_set::{
     UpdateSetRetrieveArgs, UpdateSetSub,
 };
 pub use user::UserSub;
+pub use variables::{VariablesGetArgs, VariablesSetArgs, VariablesSub};
 pub use watch::{
     Operation, WatchActivityArgs, WatchChannelArgs, WatchCountArgs, WatchLimits, WatchSub,
     WatchTableArgs,
@@ -347,6 +349,11 @@ pub enum Command {
     },
     /// Comments and work notes for one record, parsed into entries (`sn journal <TABLE> <SYS_ID>`).
     Journal(JournalArgs),
+    /// Catalog variables on a record: read, and write with verification.
+    Variables {
+        #[command(subcommand)]
+        sub: VariablesSub,
+    },
     /// Watch records change in real time (AMB websocket). Streams JSONL.
     Watch {
         #[command(subcommand)]

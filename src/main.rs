@@ -2,7 +2,7 @@ use clap::error::ErrorKind;
 use is_terminal::IsTerminal;
 use sn::cli::{
     AppSub, AtfSub, AttachmentSub, AuthSub, CatalogSub, ChangeSub, Cli, CmdbSub, Command,
-    IdentifySub, ImportSub, SchemaSub, ScoresSub, TableSub, UpdateSetSub, UserSub,
+    IdentifySub, ImportSub, SchemaSub, ScoresSub, TableSub, UpdateSetSub, UserSub, VariablesSub,
 };
 use sn::error::Result;
 use sn::output::emit_error;
@@ -88,6 +88,10 @@ fn run(cli: Cli) -> Result<()> {
             TableSub::Delete(args) => sn::cli::table::delete(&global, args),
         },
         Command::Journal(args) => sn::cli::journal::run(&global, args),
+        Command::Variables { sub } => match sub {
+            VariablesSub::Get(args) => sn::cli::variables::get(&global, args),
+            VariablesSub::Set(args) => sn::cli::variables::set(&global, args),
+        },
         Command::Watch { sub } => sn::cli::watch::run(&global, sub),
         Command::Schema { sub } => match sub {
             SchemaSub::Tables(args) => sn::cli::schema::tables(&global, args),

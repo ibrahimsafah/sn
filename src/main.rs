@@ -2,7 +2,7 @@ use clap::error::ErrorKind;
 use is_terminal::IsTerminal;
 use sn::cli::{
     AppSub, AtfSub, AttachmentSub, AuthSub, CatalogSub, ChangeSub, Cli, CmdbSub, Command,
-    IdentifySub, ImportSub, SchemaSub, ScoresSub, TableSub, UpdateSetSub, UserSub,
+    IdentifySub, ImportSub, SchemaSub, ScoresSub, TableSub, UpdateSetSub, UserSub, VariablesSub,
 };
 use sn::error::Result;
 use sn::output::emit_error;
@@ -86,6 +86,11 @@ fn run(cli: Cli) -> Result<()> {
             TableSub::Create(args) => sn::cli::table::create(&global, args),
             TableSub::Update(args) => sn::cli::table::update(&global, args),
             TableSub::Delete(args) => sn::cli::table::delete(&global, args),
+        },
+        Command::Journal(args) => sn::cli::journal::run(&global, args),
+        Command::Variables { sub } => match sub {
+            VariablesSub::Get(args) => sn::cli::variables::get(&global, args),
+            VariablesSub::Set(args) => sn::cli::variables::set(&global, args),
         },
         Command::Watch { sub } => sn::cli::watch::run(&global, sub),
         Command::Schema { sub } => match sub {
@@ -187,6 +192,7 @@ fn run(cli: Cli) -> Result<()> {
         Command::Ping => sn::cli::ping::run(&global),
         Command::Open(args) => sn::cli::open_record::run(&global, args),
         Command::Raw(args) => sn::cli::raw::run(&global, args),
+        Command::Graphql(args) => sn::cli::graphql::run(&global, args),
         Command::Completion(args) => sn::cli::completion::run(args),
     }
 }

@@ -7,10 +7,12 @@ pub mod catalog;
 pub mod change;
 pub mod cmdb;
 pub mod completion;
+pub mod graphql;
 pub mod identify;
 pub mod import;
 pub mod init;
 pub mod introspect;
+pub mod journal;
 pub mod open_record;
 pub mod ping;
 pub mod profile;
@@ -21,6 +23,7 @@ pub mod scores;
 pub mod table;
 pub mod update_set;
 pub mod user;
+pub mod variables;
 pub mod watch;
 
 pub use aggregate::AggregateArgs;
@@ -48,9 +51,11 @@ pub use cmdb::{
     CmdbRelationDeleteArgs, CmdbRelationSub, CmdbSub, CmdbUpdateArgs,
 };
 pub use completion::{CompletionArgs, Shell as CompletionShell};
+pub use graphql::GraphqlArgs;
 pub use identify::{IdentifyArgs, IdentifyEnhancedArgs, IdentifySub};
 pub use import::{ImportBulkArgs, ImportCreateArgs, ImportGetArgs, ImportSub};
 pub use init::InitArgs;
+pub use journal::{JournalArgs, JournalSource};
 pub use open_record::OpenArgs;
 pub use profile::{ProfileAddArgs, ProfileSub};
 pub use progress::ProgressArgs;
@@ -66,6 +71,7 @@ pub use update_set::{
     UpdateSetRetrieveArgs, UpdateSetSub,
 };
 pub use user::UserSub;
+pub use variables::{VariablesGetArgs, VariablesSetArgs, VariablesSub};
 pub use watch::{
     Operation, WatchActivityArgs, WatchChannelArgs, WatchCountArgs, WatchLimits, WatchSub,
     WatchTableArgs,
@@ -341,6 +347,13 @@ pub enum Command {
         #[command(subcommand)]
         sub: TableSub,
     },
+    /// Comments and work notes for one record, parsed into entries (`sn journal <TABLE> <SYS_ID>`).
+    Journal(JournalArgs),
+    /// Catalog variables on a record: read, and write with verification.
+    Variables {
+        #[command(subcommand)]
+        sub: VariablesSub,
+    },
     /// Watch records change in real time (AMB websocket). Streams JSONL.
     Watch {
         #[command(subcommand)]
@@ -419,6 +432,8 @@ pub enum Command {
     Open(OpenArgs),
     /// Generic REST passthrough for unmodeled endpoints (`sn raw <METHOD> <PATH>`).
     Raw(RawArgs),
+    /// Run a GraphQL query against POST /api/now/graphql (`sn graphql <QUERY>`).
+    Graphql(GraphqlArgs),
     /// Generate a shell completion script (`sn completion <SHELL>`).
     Completion(CompletionArgs),
 }

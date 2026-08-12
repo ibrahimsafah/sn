@@ -63,6 +63,9 @@ src/
     ping.rs         → sn ping (auth + latency + ServiceNow build version)
     open_record.rs  → sn open <table> <sys_id> (opens the form in the browser)
     raw.rs          → sn raw <method> <path> (REST passthrough for unmodeled endpoints; --header, --query, --data/--field)
+    graphql.rs      → sn graphql <query> (GraphQL passthrough: POST /api/now/graphql; in-band errors → exit 2 with the array in sn_error)
+    journal.rs      → sn journal <table> <sys_id> (comments/work notes parsed into entries; record-stream source by default, sys_journal_field rows via --source table)
+    variables.rs    → sn variables get/set (catalog variables on a record; set pre-validates names, writes via the undocumented sn_sc variables PUT — the one path open to itil — and re-reads to verify, since the endpoint 200s on silently-skipped names)
     completion.rs   → sn completion <shell> (clap_complete)
 ```
 
@@ -90,6 +93,7 @@ Base paths and quirks not obvious from the module list:
 | `import` | `/api/now/import/{stagingTableName}` | single create + bulk via `insertMultiple`; staging table is positional |
 | `identify` | `/api/now/identifyreconcile` | POST-only; CI create/update + read-only query; enhanced variants accept `--options`; payload via `--data` |
 | schema (undocumented) | `GET /api/now/doc/table/schema` (tables); `GET /api/now/ui/meta/{table}` (columns/choices/refs) | not in SN's OpenAPI specs; may 404 on very old instances |
+| `graphql` | `POST /api/now/graphql` | one endpoint, the whole merged schema: scripted namespaces + generated `GlideRecord_Query`/`GlideRecord_Mutation`/`GlideAggregateRecord_Query` (a field per table). Failure is in-band — HTTP 200 with an `errors` array, sometimes beside partial `data` — so the command maps non-empty `errors` to exit 2 (full array in `sn_error`) and still writes partial `data` to stdout; success unwraps `data` |
 | `watch` (undocumented) | `wss://<instance>/amb` (Bayeux/CometD) | cookie-auth only — `Authorization` is ignored; needs an `Origin` header and a session minted by a prior HTTP call. See "Record watchers" below |
 
 ### CICD async pattern
@@ -143,7 +147,7 @@ Transport gaps: the socket is opened directly rather than through reqwest, so it
 
 Guards live in `tests/introspect.rs` (no node named `help`, unique command paths, globals not duplicated, builtins gone but `app install --version` intact). Note that `tests/cli_surface.rs::every_argument_has_help_text` walks this tree: it chains the root's `global_args`, because checking `args` alone would silently stop covering 11 flags rather than fail.
 
-Four places document this schema by hand and must move together: `.claude/skills/sn.md`, `skills/sn/SKILL.md`, `docs/agent-guide.md`, and `README.md`.
+Four places document this schema by hand and must move together: `.claude/skills/sn.md`, `skills/sn/SKILL.md`, `docs/agent-guide.md`, and `docs/agent-integration.md` (the README links there but carries no schema detail itself).
 
 ### Profile resolution precedence
 

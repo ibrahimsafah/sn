@@ -385,6 +385,67 @@ sn table list incident --query "active=true^priority=1^ORpriority=2^ORDERBYDESCs
 sn table list incident --query "assigned_to=6816f79c...^ORassigned_toISEMPTY"
 ```
 
+## Comments & work notes (`journal`)
+
+```bash
+sn journal incident <sys_id>                  # entries newest first
+sn journal incident <sys_id> --comments       # or --work-notes (mutually exclusive)
+sn journal incident <sys_id> --limit 5        # newest 5 only
+sn journal incident <sys_id> --raw            # the unparsed rendered stream (JSON string)
+sn journal incident <sys_id> --source table   # exact sys_journal_field rows
+```
+
+Output is an array of `{created_on, author, element, label, text}`, newest
+first. `element` is the journal column (`comments` / `work_notes`); `label` is
+the rendered field label the entry carried ("Comments", "Work notes",
+"Additional comments" — instance-dependent).
+
+Why two sources: journal entries live one-per-row in `sys_journal_field`, but
+that table is ACL-locked for non-admin roles — the row *count* survives the
+ACLs, the rows do not. The default `--source record` therefore reads the
+record's rendered journal stream (readable by any role that can read the
+record) and parses it; its timestamps are in the calling user's timezone and
+date format. `--source table` returns the exact rows — UTC timestamps,
+usernames instead of display names, no `label` — when the profile's ACLs allow;
+if rows exist but all were filtered, the command exits 2 naming the cause and
+pointing back at `--source record`, rather than emitting a misleading `[]`.
+
+There is no `journal add`: writing an entry is a plain field write —
+`sn table update incident <sys_id> --field work_notes="checked the router"`.
+
+## Catalog variables (`variables`)
+
+```bash
+sn variables get sc_req_item <sys_id>                        # [{name, label, value}] sorted by name
+sn variables get incident <sys_id>                           # record-producer answers
+sn variables set sc_req_item <sys_id> --field acrobat=true   # write + verify
+sn variables set sc_req_item <sys_id> --data '{"Additional_software_requirements": "..."}'
+```
+
+Reads walk whichever join holds the values: `sc_item_option` via
+`sc_item_option_mtom` for an RITM, `question_answer` (keyed by
+`table_name`/`table_sys_id`) for a record produced by a record producer.
+
+Writes go through `PUT /api/sn_sc/servicecatalog/variables/{table}/{sys_id}` —
+an undocumented scripted REST resource, but the only write path open to
+non-admin roles: direct Table API writes to `sc_item_option` are 403 for a
+plain `itil` user, while this endpoint gates on write access to the parent
+record itself. Its failure mode is silence — unknown names, wrong case, or a
+record that does not own the variables all return 200 with nothing written. So
+`set` restores the exit-code contract: it validates names against a read of the
+pool first (unknown → exit 1 listing the real names, before any write), then
+re-reads after the PUT and diffs — success reports
+`{updated: {name: {from, to}}, unchanged: {...}}`, and a value that did not
+persist (read-only variable, value normalization) is exit 2 naming the keys.
+
+Variable names are case-sensitive; values are raw (reference → sys_id,
+checkbox → `true`/`false`, dates in internal format). An `sc_task` target is
+resolved to its `request_item` automatically — the task does not own its RITM's
+variable pool, and writing to it directly would be silently skipped — with the
+hop reported as `resolved_from`. Multi-row variable sets
+(`sc_multi_row_question_answer`) are out of scope: they store row JSON, not
+per-variable values.
+
 ## Writing records (`create`, `update`, `delete`)
 
 **Body input** — two mutually exclusive ways (mixing them is exit 1):
@@ -777,12 +838,30 @@ sn open incident a1b2c3 [--print-url]    # open the record's form in a browser; 
 sn raw GET /api/now/table/incident --query sysparm_limit=5      # REST passthrough for unmodeled endpoints
 sn raw POST /api/now/table/incident --data '{"short_description":"via raw"}'
 sn raw GET /api/now/table/incident -H 'X-no-response-body: true'   # repeatable request headers
+sn graphql 'query { GlideRecord_Query { incident(pagination: {limit: 5}) { _rowCount _results { number { value } } } } }'
+sn graphql @query.graphql --var id=a1b2c3 --variables '{"limit": 5}'   # document from file; string + typed variables
 sn completion zsh                        # shell completion script (bash|zsh|fish|powershell|elvish) to stdout
 sn introspect                            # full command tree as JSON — auto-generate MCP / function-call schemas
 ```
 
 `sn raw <METHOD> <PATH>` applies the active profile's auth/proxy/TLS and the
 standard output/error contract; use it for endpoints `sn` doesn't model.
+
+`sn graphql <QUERY>` runs a GraphQL document against `POST /api/now/graphql` —
+the whole surface, including the generated `GlideRecord_Query` /
+`GlideRecord_Mutation` / `GlideAggregateRecord_Query` namespaces (a query field
+and CRUD mutations for every table; per-field display values, `_choices` on
+choice fields, `_table_metadata` ACL verdicts, `_reference` dot-walking,
+`_rowCount` totals alongside a page). The document comes inline, from `@file`,
+or `@-` (stdin). On success stdout gets `data` unwrapped (`--output raw` keeps
+the envelope). GraphQL reports failure **in-band** — HTTP 200 with an `errors`
+array, sometimes next to partial `data` — so a response with errors exits 2
+with the full array under `sn_error`, and partial `data` still reaches stdout
+first. `--var k=v` sets a string variable (repeatable; only the first `=`
+splits, so encoded queries pass through). `--variables '{...}'` supplies a JSON
+object for non-string variables; `--var` entries overlay it. Prefer variables
+over splicing values into the document — a sys_id in `--var` can't break query
+syntax.
 `sn introspect` emits the whole command tree as **one recursive object** —
 `{name, about, args[], subcommands[]}`, with `subcommands` nesting the same shape
 all the way down. There is **no** top-level `commands` array (`jq '.commands[]'`
@@ -877,6 +956,7 @@ sn profile add NAME --instance X --username Y --password-stdin [--force|--no-ver
 sn profile list|show NAME|use NAME|remove NAME    sn auth login|status|refresh|logout
 sn user me     sn open TABLE SYS_ID [--print-url]     sn completion SHELL
 sn raw METHOD PATH [-q k=v ...] [--data ...|--field k=v ...]
+sn graphql QUERY|@FILE|@- [--var K=V ...] [--variables JSON|@FILE|@-] [--operation NAME]
 sn introspect  sn progress PROGRESS_ID
 
 sn schema tables [--filter SUBSTR]
@@ -891,6 +971,8 @@ sn table create  TABLE (--data JSON|@FILE|@- | --field K=V ...) [--fields CSV] [
 sn table update  TABLE SYS_ID (--data ...|--field K=V ...) [same write flags]     # PATCH — the only write verb
 sn table delete  TABLE SYS_ID [--yes] [--query-no-domain]
 sn table TABLE [SYS_ID]                                                           # verb optional: = list / = get
+sn journal TABLE SYS_ID [--comments|--work-notes] [--limit N] [--raw] [--source record|table]
+sn variables get TABLE SYS_ID                       sn variables set TABLE SYS_ID (--data JSON|@FILE|@- | --field K=V ...)
 
 sn change list [--type normal|emergency|standard] [shared list flags]
 sn change get|update|delete SYS_ID [--type ...] [--yes]     sn change create [--type ...] [--template ID] (--data|--field)

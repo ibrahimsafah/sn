@@ -1,5 +1,60 @@
 # Changelog
 
+## Unreleased
+
+### Added
+
+- **`sn variables get|set <TABLE> <SYS_ID>`** — catalog variables on a record, read and
+  written with verification. Reads walk whichever join holds the values
+  (`sc_item_option` via `sc_item_option_mtom` for an RITM; `question_answer` for a
+  record producer's target record) and emit `[{name, label, value}]` sorted by name.
+  Writes go through the undocumented `PUT
+  /api/sn_sc/servicecatalog/variables/{table_name}/{sys_id}` — established live as the
+  only write path open to non-admin roles (direct Table API writes to `sc_item_option`
+  are 403 for a plain `itil` user; the endpoint gates on `canWrite()` of the parent
+  record). The endpoint's failure mode is silence — unknown names, wrong case, or a
+  record that does not own the variables return 200 with nothing written — so `set`
+  validates names against a pre-flight read (unknown → exit 1 listing the pool, before
+  any write) and re-reads after the PUT: success reports `{updated: {name: {from, to}},
+  unchanged}`, a value that did not persist is exit 2 naming the keys. An `sc_task`
+  target is resolved to its `request_item` (the task does not own the RITM's variable
+  pool; a direct write would be skipped silently), reported as `resolved_from`.
+  Multi-row variable sets are unsupported.
+
+- **`sn journal <TABLE> <SYS_ID>`** — comments and work notes for one record, parsed
+  into structured entries (`[{created_on, author, element, label, text}]`, newest
+  first). Journal entries live in `sys_journal_field`, but that table is ACL-locked
+  for non-admin roles — measured live, an `itil` query returns the row count and zero
+  rows. So the default `--source record` reads the record's *rendered* journal stream
+  over GraphQL (readable by any role that can read the record) and parses it back into
+  entries; `--source table` opts into exact `sys_journal_field` rows — UTC timestamps,
+  usernames — and when rows exist but ACLs remove them all, the error names the cause
+  and points back at `--source record` instead of returning an empty array. `--comments`
+  / `--work-notes` filter by type (and narrow what is fetched), `--limit N` keeps the
+  newest N, `--raw` emits the unparsed stream. Tables missing the combined
+  `comments_and_work_notes` column fall back to the single journal columns
+  automatically. Record-source timestamps are rendered in the caller's timezone and
+  date format; writes need no new verb (`sn table update <t> <id> --field
+  work_notes=...`).
+
+- **`sn graphql <QUERY>`** — run a GraphQL document against `POST /api/now/graphql`,
+  which serves the instance's whole GraphQL surface: the scripted namespaces plus the
+  generated `GlideRecord_Query` / `GlideRecord_Mutation` / `GlideAggregateRecord_Query`
+  namespaces (a query field and CRUD mutations per table, with per-field display values,
+  inline choice lists, ACL-evaluated metadata, and dot-walking through references). The
+  document comes inline, from `@file`, or `@-` (stdin); `--var k=v` sets a string
+  variable (repeatable, first `=` splits), `--variables '{...}'` supplies a whole JSON
+  object for typed values (`--var` wins on conflict), and `--operation` selects from a
+  multi-operation document.
+
+  The point over `sn raw`: GraphQL reports failure **in-band** — HTTP 200 with an
+  `errors` array, sometimes alongside partial `data` — which would read as success
+  under the exit-code contract. `sn graphql` maps a response with errors to exit 2,
+  putting the first message in the stderr envelope and the full array under `sn_error`,
+  while any partial `data` still reaches stdout first. On success, stdout gets `data`
+  unwrapped, the GraphQL analogue of stripping `{"result": ...}`; `--output raw` keeps
+  the whole response body.
+
 ## 0.11.0 (2026-08-04)
 
 Two threads run through this release. The command surface gets the ergonomics a caller

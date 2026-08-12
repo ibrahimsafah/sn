@@ -1,6 +1,6 @@
 ---
 name: sn
-description: Use when the user asks about ServiceNow data, incidents, change requests, problems, CIs, attachments, CMDB, service catalog, import sets, or any SNOW/SN operations. Also use when user says "sn", "servicenow", or references a ServiceNow instance, CICD operations (app install/publish/rollback, update sets, ATF tests), aggregate statistics, Performance Analytics scorecards, CI reconciliation, or watching records change in real time (record watchers / live updates / AMB websocket).
+description: Use when the user asks about ServiceNow data, incidents, change requests, problems, CIs, attachments, CMDB, service catalog, import sets, or any SNOW/SN operations. Also use when user says "sn", "servicenow", or references a ServiceNow instance, comments/work notes on a record, CICD operations (app install/publish/rollback, update sets, ATF tests), aggregate statistics, Performance Analytics scorecards, CI reconciliation, GraphQL queries, or watching records change in real time (record watchers / live updates / AMB websocket).
 ---
 
 # sn — ServiceNow CLI
@@ -91,6 +91,28 @@ sn table delete incident <sys_id> --yes                # --yes required on non-T
 ```
 
 `get` takes no `--query`; filter with `list --query "..." --setlimit 1`.
+
+## Journal (comments & work notes)
+
+```bash
+sn journal incident <sys_id>                  # entries newest first: [{created_on, author, element, label, text}]
+sn journal incident <sys_id> --comments       # or --work-notes (mutually exclusive)
+sn journal incident <sys_id> --limit 5        # newest 5
+sn journal incident <sys_id> --raw            # unparsed rendered stream as a JSON string
+sn journal incident <sys_id> --source table   # exact sys_journal_field rows (UTC, usernames) — needs table ACL access
+```
+
+Default `--source record` parses the record's rendered journal stream (works for any role that can read the record; timestamps in the caller's timezone/format). `sys_journal_field` itself is ACL-locked for non-admin roles — with `--source table` the count leaks but rows come back empty, and the command errors naming the cause instead of emitting `[]`. To *add* an entry: `sn table update incident <sys_id> --field work_notes="..."`.
+
+## Catalog variables (read + verified write)
+
+```bash
+sn variables get sc_req_item <sys_id>                        # [{name, label, value}] sorted by name
+sn variables get incident <sys_id>                           # record-producer answers (question_answer)
+sn variables set sc_req_item <sys_id> --field acrobat=true   # write + verify; repeatable --field, or --data '{...}'
+```
+
+Writes go through the undocumented `PUT /api/sn_sc/servicecatalog/variables/{table}/{sys_id}` — the only write path open to non-admin roles (direct `sc_item_option` writes are 403 for `itil`); it gates on write access to the record itself. The endpoint silently skips unknown variable names (200 with nothing written), so `set` validates names first — case-sensitive; unknown → exit 1 listing the pool, **before** any write — then re-reads after the PUT: a value that did not persist is exit 2, success reports `{updated: {name: {from, to}}, unchanged}`. An `sc_task` is resolved to its RITM automatically (`resolved_from` in the output). Multi-row variable sets are unsupported.
 
 ## Encoded query (--query)
 
@@ -290,9 +312,13 @@ sn raw POST /api/now/table/incident --data '{"short_description":"x"}'
 sn raw PATCH /api/now/table/incident/<sys_id> --field state=2
 sn raw DELETE /api/now/table/incident/<sys_id>
 sn raw GET /api/now/table/incident -H 'X-no-response-body: true'   # repeatable; Authorization is rejected
+sn graphql 'query { GlideRecord_Query { incident(pagination: {limit: 5}) { _rowCount _results { number { value } } } } }'
+sn graphql @query.graphql --var id=<sys_id> --variables '{"limit": 5}' --operation Get
 sn completion bash|zsh|fish|powershell|elvish   # zsh: > ~/.zsh/completions/_sn (dir on fpath + compinit)
 sn introspect                              # full command tree as JSON (for MCP/tool generation)
 ```
+
+`graphql` runs a document against `POST /api/now/graphql` — the whole GraphQL surface, including the generated `GlideRecord_Query`/`GlideRecord_Mutation`/`GlideAggregateRecord_Query` per-table namespaces (per-field display values, `_choices` on choice fields, `_table_metadata` ACL verdicts, `_reference` dot-walking, `_rowCount` totals). Success unwraps `data` (`--output raw` keeps the envelope). GraphQL fails **in-band** — HTTP 200 with an `errors` array — so errors exit 2 with the array under `sn_error`, and partial `data` still reaches stdout. `--var k=v` sets a string variable (first `=` splits); `--variables '{...}'` is a JSON object for typed values; `--var` wins on conflict.
 
 `raw` emits the response exactly as ServiceNow returns it (no unwrapping); method is case-insensitive. `-H/--header 'Name: Value'` is repeatable and beats the header the client would otherwise send (`Content-Type` included); `Authorization` is rejected — identity comes from the profile. Both directions stay JSON: a non-JSON response fails to parse. `introspect` args carry `takes_value`, `value_name`, `positional`, `repeatable`, `default_values`, `aliases`, `possible_values`, `conflicts_with`, and `help_heading`; flags report `takes_value: false` — pass them bare (`--all`, not `--all true`). `conflicts_with` names the flags that cannot be combined (`--data` with `--field` is exit 1). The root carries `version` and `global_args`: **a command's effective flags are its own `args` plus the root's `global_args`** — the 11 propagated globals are emitted once, not repeated on all 121 nodes. Nothing named `help` appears in the tree, and `--help`/`--version` are omitted from `args[]`.
 

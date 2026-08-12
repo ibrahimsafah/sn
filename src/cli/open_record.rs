@@ -1,8 +1,7 @@
-use crate::cli::table::{build_profile, format_from_flags};
+use crate::cli::table::{build_profile, write_response};
 use crate::cli::GlobalFlags;
 use crate::client::normalize_base_url;
 use crate::error::{Error, Result};
-use crate::output::{emit_value, map_stdout_err};
 use serde_json::json;
 
 #[derive(clap::Args, Debug)]
@@ -36,5 +35,5 @@ pub fn run(global: &GlobalFlags, args: OpenArgs) -> Result<()> {
     webbrowser::open(&url).map_err(|e| Error::Transport(format!("open browser: {e}")))?;
 
     let out = json!({ "opened": true, "url": url });
-    emit_value(std::io::stdout().lock(), &out, format_from_flags(global)).map_err(map_stdout_err)
+    write_response(global, &out)
 }

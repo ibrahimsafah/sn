@@ -56,12 +56,22 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # was only ever a thin shim over this same code.
 rustls-pki-types = { version = "1", features = ["std"] }
 webpki-roots = "1"
+# Advisory file locks for the config directory, so N parallel agent invocations
+# can't lose each other's profile/token writes. `fs4` over the unmaintained
+# `fs2` it forked, and over hand-rolling it on `rustix`/`windows-sys` (which
+# would mean unsafe FFI here): it is `flock(2)` on Unix and `LockFileEx` on Windows
+# behind one safe API, adds no transitive crate we don't already build (rustix
+# arrives with tempfile), is MIT OR Apache-2.0, and declares the same 1.75 MSRV
+# we do. std's `File::lock` would need MSRV 1.89.
+fs4 = { version = "1.1", default-features = false, features = ["sync"] }
+# Promoted from dev-dependencies: config writes go to a same-directory temp file
+# created 0600 and are renamed into place, so this is now a runtime dependency.
+tempfile = "3"
 
 [dev-dependencies]
 wiremock = "0.6"
 assert_cmd = "2"
 predicates = "3"
-tempfile = "3"
 serial_test = "3"
 tokio = { version = "1", features = ["rt", "macros"] }
 

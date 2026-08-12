@@ -1,9 +1,9 @@
 use crate::cli::{DisplayValueArg, GlobalFlags, ADVANCED};
 use crate::error::Result;
-use crate::output::emit_value;
 use clap::{Subcommand, ValueEnum};
+use serde_json::{json, Value};
 
-use super::table::{build_client, build_profile, format_from_flags, unwrap_or_raw};
+use super::table::{build_client, build_profile, unwrap_or_raw, write_response};
 
 /// Score-series options, which only take effect alongside --include-scores.
 const SCORE_DATA: &str = "Score data options";
@@ -85,8 +85,8 @@ pub struct ScoresListArgs {
     /// Step between scores.
     #[arg(long, alias = "sysparm-step", help_heading = SCORE_DATA)]
     pub step: Option<u32>,
-    /// Maximum number of scores to return (-1 = all).
-    #[arg(long, alias = "sysparm-limit", help_heading = SCORE_DATA)]
+    /// Maximum number of scores to return (-1 = all). Also spelled --limit or --setLimit.
+    #[arg(long, alias = "sysparm-limit", alias = "limit", alias = "setLimit", help_heading = SCORE_DATA)]
     pub limit: Option<i64>,
     /// Include available breakdowns in the response.
     #[arg(long, alias = "sysparm-include-available-breakdowns", help_heading = ADVANCED)]
@@ -286,8 +286,7 @@ pub fn list(global: &GlobalFlags, args: ScoresListArgs) -> Result<()> {
 
     let resp = client.get(SCORECARDS_PATH, &q)?;
     let out = unwrap_or_raw(resp, global.output);
-    emit_value(std::io::stdout().lock(), &out, format_from_flags(global))
-        .map_err(crate::output::map_stdout_err)
+    write_response(global, &out)
 }
 
 pub fn favorite(global: &GlobalFlags, args: ScoresFavoriteArgs) -> Result<()> {
@@ -295,16 +294,24 @@ pub fn favorite(global: &GlobalFlags, args: ScoresFavoriteArgs) -> Result<()> {
     let client = build_client(&profile, global.timeout)?;
 
     let q = vec![("sysparm_uuid".to_string(), args.uuid)];
-    let resp = client.post(SCORECARDS_PATH, &q, &serde_json::json!({}))?;
+    let resp = client.post(SCORECARDS_PATH, &q, &json!({}))?;
     let out = unwrap_or_raw(resp, global.output);
-    emit_value(std::io::stdout().lock(), &out, format_from_flags(global))
-        .map_err(crate::output::map_stdout_err)
+    write_response(global, &out)
 }
 
 pub fn unfavorite(global: &GlobalFlags, args: ScoresFavoriteArgs) -> Result<()> {
     let profile = build_profile(global)?;
     let client = build_client(&profile, global.timeout)?;
 
+    let uuid = args.uuid.clone();
     let q = vec![("sysparm_uuid".to_string(), args.uuid)];
-    client.delete(SCORECARDS_PATH, &q)
+    // Same endpoint as `favorite`, so it reports the same way: a caller that can
+    // parse one result must not have to special-case the other on empty stdout.
+    // A DELETE answered 204/no body parses to `null`, which is nothing to branch
+    // on, so name the operation instead.
+    let out = match unwrap_or_raw(client.delete_json(SCORECARDS_PATH, &q)?, global.output) {
+        Value::Null => json!({ "ok": true, "uuid": uuid }),
+        v => v,
+    };
+    write_response(global, &out)
 }

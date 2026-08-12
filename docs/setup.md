@@ -141,7 +141,7 @@ a human run `sn auth login`.
 
 **One-time admin setup** (if the instance has no registry entry yet): **System OAuth → Application Registry → New → "Create an OAuth API endpoint for external clients"**; set the redirect URL to `http://localhost:8400/callback` — which must match `--redirect-uri` **exactly** — and copy the client ID. For the default authorization-code flow, enable **Public Client / PKCE required** so no secret is needed; only `client_credentials` needs the generated secret.
 
-After login, tokens refresh transparently. Manage the session with `sn auth status` (method + token expiry), `sn auth refresh`, and `sn auth logout`. The client ID and redirect URI live in `config.toml`; the secret and tokens in `credentials.toml` (chmod 600).
+After login, tokens refresh transparently. Manage the session with `sn auth status` (method + token expiry), `sn auth refresh`, and `sn auth logout`. The client ID and redirect URI live in `config.toml`; the secret and tokens in `credentials.toml` (both files are `0600`).
 
 Verify either auth method at any time with `sn ping`.
 
@@ -152,9 +152,22 @@ Credentials use a two-file, AWS CLI-style split:
 | File | Contains | Location (Linux) |
 |---|---|---|
 | `config.toml` | Instance URLs, default profile, non-secret OAuth config | `~/.config/sn/` |
-| `credentials.toml` | Usernames, passwords, secrets, cached tokens (chmod 600) | `~/.config/sn/` |
+| `credentials.toml` | Usernames, passwords, secrets, cached tokens | `~/.config/sn/` |
+| `.sn.lock` | Empty; the advisory lock serializing config writes | `~/.config/sn/` |
 
 macOS uses `~/Library/Application Support/sn/` and Windows `%APPDATA%\sn\`.
+
+**Both** files are written `0600` on Unix — `config.toml` too, since it names the
+instances and OAuth clients you talk to. They are created at that mode rather
+than chmod'd afterwards, so a new `credentials.toml` is never briefly readable
+by anyone else, and a file an older release left at `0644` is repaired on the
+next write. Writes go to a temporary file in the same directory and are renamed
+into place, so a crash leaves the old file rather than half of the new one.
+
+Because that write is a read-modify-write, it is serialized by an advisory lock
+on the `.sn.lock` sidecar — parallel `sn` invocations can each add a profile
+without losing one another's. If another process holds the lock for more than
+10 seconds, the command fails (exit 1) naming the lock file instead of hanging.
 
 Point `sn` at a different config directory (for testing or sandboxing) with `SN_CONFIG_DIR`.
 

@@ -46,7 +46,7 @@ sn introspect | jq '[.. | objects | select(.conflicts_with? // [] | length > 0)
 
 Each `args[]` entry carries `name`, `long`, `short`, `help`, `help_heading`, `required`, `takes_value`, `value_name`, `positional`, `repeatable`, `aliases`, `default_values`, `possible_values`, and `conflicts_with`. `--help` and `--version` are omitted — they exit before any handler runs — and nothing named `help` appears in the tree.
 
-The root carries two extra keys: `version` (the binary that produced the tree) and `global_args` (the 11 flags clap propagates to every command). **A command's effective flags are its own `args` plus the root's `global_args`.** They live at the root because serializing them onto all 121 nodes was three quarters of the output:
+The root carries two extra keys: `version` (the binary that produced the tree) and `global_args` (the 11 flags clap propagates to every command). **A command's effective flags are its own `args` plus the root's `global_args`.** They live at the root because serializing them onto all 130 nodes was three quarters of the output:
 
 ```bash
 # Everything `table list` accepts:

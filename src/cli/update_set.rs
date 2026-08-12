@@ -1,4 +1,4 @@
-use crate::cli::table::{build_client, build_profile, unwrap_or_raw};
+use crate::cli::table::{build_client, build_profile, confirm_destructive, unwrap_or_raw};
 use crate::cli::GlobalFlags;
 use crate::error::Result;
 use clap::Subcommand;
@@ -95,6 +95,9 @@ pub struct UpdateSetBackOutArgs {
     /// Also roll back any application installs included in the set.
     #[arg(long)]
     pub rollback_installs: bool,
+    /// Skip confirmation prompt (required for non-interactive use).
+    #[arg(long, short = 'y')]
+    pub yes: bool,
     /// Block until the operation completes (polls progress API).
     #[arg(long)]
     pub wait: bool,
@@ -188,6 +191,14 @@ pub fn commit_multiple(global: &GlobalFlags, args: UpdateSetCommitMultipleArgs) 
 }
 
 pub fn back_out(global: &GlobalFlags, args: UpdateSetBackOutArgs) -> Result<()> {
+    // Not a delete, but it reverts every record the set applied — instance-wide,
+    // asynchronous, and with no undo of its own. Gated for the same reason the
+    // deletes are: nothing here asks a second time.
+    confirm_destructive(
+        args.yes,
+        "back out",
+        &format!("update set {}", args.update_set_id),
+    )?;
     let profile = build_profile(global)?;
     let client = build_client(&profile, global.timeout)?;
     let mut query: Vec<(String, String)> = vec![("update_set_id".into(), args.update_set_id)];

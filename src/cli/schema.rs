@@ -1,4 +1,4 @@
-use crate::cli::table::{build_client, build_profile};
+use crate::cli::table::{build_client, build_profile, take_field};
 use crate::cli::{GlobalFlags, OutputMode};
 use crate::error::{Error, Result};
 use clap::Subcommand;
@@ -60,10 +60,20 @@ pub fn tables(global: &GlobalFlags, args: SchemaTablesArgs) -> Result<()> {
     let profile = build_profile(global)?;
     let client = build_client(&profile, global.timeout)?;
     let resp = client.get("/api/now/doc/table/schema", &[])?;
-    let list = match (global.output, resp.get("result")) {
-        (OutputMode::Raw, _) => resp.clone(),
-        (_, Some(Value::Array(a))) => Value::Array(filter_tables(a.clone(), &args)),
-        _ => resp.clone(),
+    // Every table on the instance comes back here — thousands of objects — so
+    // this unwraps by moving rather than cloning the array out of the envelope.
+    let list = match global.output {
+        OutputMode::Raw => resp,
+        _ => match resp {
+            // A response with no `result` at all is emitted whole rather than
+            // as `[]`, which would report an empty instance to the caller.
+            Value::Object(mut m) => match m.remove("result") {
+                Some(Value::Array(a)) => Value::Array(filter_tables(a, &args)),
+                Some(other) => other,
+                None => Value::Object(m),
+            },
+            other => other,
+        },
     };
     crate::cli::table::write_response(global, &list)
 }
@@ -107,12 +117,10 @@ pub fn columns(global: &GlobalFlags, args: SchemaColumnsArgs) -> Result<()> {
     let path = format!("/api/now/ui/meta/{}", args.table);
     let resp = client.get(&path, &[])?;
     let list = match global.output {
-        OutputMode::Raw => resp.clone(),
+        OutputMode::Raw => resp,
         OutputMode::Default | OutputMode::Table => {
-            let cols = resp
-                .get("result")
-                .and_then(|r| r.get("columns"))
-                .cloned()
+            let cols = take_field(resp, "result")
+                .and_then(|r| take_field(r, "columns"))
                 .unwrap_or(Value::Object(serde_json::Map::new()));
             Value::Array(filter_columns(cols, &args))
         }
@@ -178,13 +186,11 @@ pub fn choices(global: &GlobalFlags, args: SchemaChoicesArgs) -> Result<()> {
     let path = format!("/api/now/ui/meta/{}", args.table);
     let resp = client.get(&path, &[])?;
     let out = match global.output {
-        OutputMode::Raw => resp.clone(),
-        OutputMode::Default | OutputMode::Table => resp
-            .get("result")
-            .and_then(|r| r.get("columns"))
-            .and_then(|c| c.get(&args.field))
-            .and_then(|f| f.get("choices"))
-            .cloned()
+        OutputMode::Raw => resp,
+        OutputMode::Default | OutputMode::Table => take_field(resp, "result")
+            .and_then(|r| take_field(r, "columns"))
+            .and_then(|c| take_field(c, &args.field))
+            .and_then(|f| take_field(f, "choices"))
             .ok_or_else(|| {
                 Error::Usage(format!(
                     "no choices found on field '{}' in table '{}'",

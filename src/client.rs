@@ -5,6 +5,7 @@ use reqwest::blocking::{Client as ReqwestClient, Response};
 use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE, SET_COOKIE, USER_AGENT};
 use reqwest::{Method, StatusCode};
 use serde_json::Value;
+use std::io::{ErrorKind, Read, Write};
 use std::time::{Duration, Instant};
 
 /// How a `Client` attaches credentials to each request. Resolved at build time
@@ -442,7 +443,19 @@ impl Client {
             .join("; "))
     }
 
-    pub fn download_file(&self, path: &str) -> Result<(Vec<u8>, Option<String>)> {
+    /// Start a binary download: performs the request, resolves the status, and
+    /// returns with the **body unread**.
+    ///
+    /// Returning a [`Download`] instead of `(Vec<u8>, Option<String>)` is what
+    /// keeps peak memory independent of attachment size — the old shape had to
+    /// materialize the whole file before the caller could write a byte of it, so
+    /// an attachment larger than RAM was simply not downloadable.
+    ///
+    /// The *status* is still resolved eagerly, and that split matters: a 404 or
+    /// a 401 must fail before the caller touches the filesystem, so a failed
+    /// download never creates (and then has to clean up) a file at or beside the
+    /// destination.
+    pub fn download_file(&self, path: &str) -> Result<Download> {
         let url = self.url(path);
         let req = self.http.request(Method::GET, &url);
         let resp = self.send(req, "GET", &url)?;
@@ -450,24 +463,98 @@ impl Client {
         let tx = transaction_id(&resp);
         log_response_headers(resp.headers());
         if !status.is_success() {
+            // Error bodies are small JSON/HTML; buffering one is not the hazard
+            // the success path is, and `from_http_text` needs it whole.
             let text = resp
                 .text()
                 .map_err(|e| Error::Transport(format!("read body: {e}")))?;
             log_body("<", &text);
             return Err(from_http_text(status, tx, &text));
         }
-        let ct = resp
-            .headers()
-            .get(CONTENT_TYPE)
-            .and_then(|v| v.to_str().ok())
-            .map(ToString::to_string);
-        let bytes = resp
-            .bytes()
-            .map_err(|e| Error::Transport(format!("read body: {e}")))?
-            .to_vec();
-        log_body("<", &format!("<{} bytes>", bytes.len()));
-        Ok((bytes, ct))
+        Ok(Download { resp, written: 0 })
     }
+}
+
+/// Bytes moved per read/write cycle by [`Download::copy_to`], and therefore the
+/// entire memory footprint of a download regardless of file size.
+pub const DOWNLOAD_BUFFER_BYTES: usize = 64 * 1024;
+
+/// A started download: response headers resolved, body still on the wire.
+///
+/// Reading the body through [`Read`] rather than `Response::bytes()` also
+/// changes what the client's `timeout` means *for this request*, and that is the
+/// point. reqwest's blocking client keeps its timeout on the blocking side only
+/// (the inner async client is built without one) and enforces it by wrapping
+/// whichever future the caller is parked on. `bytes()` parks on the *whole
+/// body*, so the 30s cap covers the entire transfer and a large-but-perfectly-
+/// healthy download dies at the cap. `Read::read` parks on *one chunk*, so the
+/// same 30s becomes a per-read idle timeout: slow-but-alive runs as long as it
+/// needs, a stalled socket still dies 30s after the last byte arrived. The
+/// header phase is unchanged (one bounded wait in reqwest's `execute_request`),
+/// so connect/handshake is still capped and no non-download request's timeout
+/// semantics move.
+pub struct Download {
+    resp: Response,
+    written: u64,
+}
+
+/// Which side of a streaming copy failed. The distinction is not cosmetic: a
+/// source failure is a transport error (exit 3) and leaves the destination
+/// undefined, while a sink failure is local and belongs to the caller, which is
+/// the only party that knows what the destination *is*.
+#[derive(Debug)]
+pub enum DownloadError {
+    /// The body stopped arriving — network drop, stall, truncated stream.
+    Source(Error),
+    /// The destination refused the bytes — disk full, broken pipe, permissions.
+    Sink(std::io::Error),
+}
+
+impl Download {
+    /// Bytes handed to the sink so far. Meaningful *after* a failed
+    /// [`copy_to`](Self::copy_to): a caller writing to an unrecallable sink
+    /// (stdout) needs to say how much truncated output it already emitted.
+    pub fn bytes_written(&self) -> u64 {
+        self.written
+    }
+
+    /// Stream the body into `sink` through a [`DOWNLOAD_BUFFER_BYTES`] buffer,
+    /// returning the total byte count.
+    pub fn copy_to<W: Write>(&mut self, sink: &mut W) -> std::result::Result<u64, DownloadError> {
+        let mut buf = vec![0u8; DOWNLOAD_BUFFER_BYTES];
+        let result = stream_body(&mut self.resp, sink, &mut buf, &mut self.written);
+        if result.is_ok() {
+            log_body("<", &format!("<{} bytes streamed>", self.written));
+        }
+        result
+    }
+}
+
+/// The copy loop, split out from [`Download::copy_to`] so it can be exercised
+/// against an arbitrary reader: the property that matters (no allocation grows
+/// with payload size) is invisible from the outside otherwise.
+fn stream_body<R: Read, W: Write>(
+    src: &mut R,
+    sink: &mut W,
+    buf: &mut [u8],
+    written: &mut u64,
+) -> std::result::Result<u64, DownloadError> {
+    loop {
+        let n = match src.read(buf) {
+            Ok(0) => break,
+            Ok(n) => n,
+            // A signal interrupting the read is not a failed transfer.
+            Err(e) if e.kind() == ErrorKind::Interrupted => continue,
+            Err(e) => {
+                return Err(DownloadError::Source(Error::Transport(format!(
+                    "read body: {e}"
+                ))))
+            }
+        };
+        sink.write_all(&buf[..n]).map_err(DownloadError::Sink)?;
+        *written += n as u64;
+    }
+    Ok(*written)
 }
 
 impl Client {
@@ -683,8 +770,12 @@ fn truncate_body(s: &str, max_chars: usize) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{collect_session_cookies, redact_token_json};
+    use super::{
+        collect_session_cookies, redact_token_json, stream_body, DownloadError,
+        DOWNLOAD_BUFFER_BYTES,
+    };
     use reqwest::header::{HeaderMap, HeaderValue, SET_COOKIE};
+    use std::io::{self, Read, Write};
 
     fn headers(raw: &[&str]) -> HeaderMap {
         let mut h = HeaderMap::new();
@@ -769,5 +860,137 @@ mod tests {
         let out = redact_token_json("<html>access_token=leaked</html>");
         assert_eq!(out, "<token response: redacted>");
         assert!(!out.contains("leaked"));
+    }
+
+    /// A reader that yields `total` bytes of a repeating pattern in chunks the
+    /// caller cannot control, recording the largest buffer it was ever handed.
+    struct PatternReader {
+        remaining: usize,
+        offset: u8,
+        max_buf_seen: usize,
+    }
+
+    impl Read for PatternReader {
+        fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+            self.max_buf_seen = self.max_buf_seen.max(buf.len());
+            if self.remaining == 0 {
+                return Ok(0);
+            }
+            // Short reads are legal and normal on a socket; hand back well under
+            // the buffer so the loop cannot assume it fills every time.
+            let n = buf.len().min(self.remaining).min(7919);
+            for (i, slot) in buf.iter_mut().take(n).enumerate() {
+                *slot = self.offset.wrapping_add(i as u8);
+            }
+            self.offset = self.offset.wrapping_add(n as u8);
+            self.remaining -= n;
+            Ok(n)
+        }
+    }
+
+    fn run_stream(total: usize) -> (Vec<u8>, usize, u64) {
+        let mut src = PatternReader {
+            remaining: total,
+            offset: 0,
+            max_buf_seen: 0,
+        };
+        let mut sink = Vec::new();
+        let mut buf = vec![0u8; DOWNLOAD_BUFFER_BYTES];
+        let mut written = 0u64;
+        let n = stream_body(&mut src, &mut sink, &mut buf, &mut written).unwrap();
+        (sink, src.max_buf_seen, n)
+    }
+
+    #[test]
+    fn streaming_never_reads_more_than_the_fixed_buffer() {
+        // The claim under test is the whole point of the change: memory does not
+        // track payload size. 4 MiB through a 64 KiB buffer, byte-exact.
+        let total = 4 * 1024 * 1024;
+        let (sink, max_buf_seen, n) = run_stream(total);
+        assert_eq!(n, total as u64);
+        assert_eq!(sink.len(), total);
+        assert!(
+            max_buf_seen <= DOWNLOAD_BUFFER_BYTES,
+            "read buffer grew to {max_buf_seen}, past the {DOWNLOAD_BUFFER_BYTES}-byte bound"
+        );
+        // Contents survive the chunk boundaries, not just the length.
+        assert!(sink.iter().enumerate().all(|(i, b)| *b == i as u8));
+    }
+
+    #[test]
+    fn empty_body_streams_to_zero_bytes() {
+        let (sink, _, n) = run_stream(0);
+        assert_eq!(n, 0);
+        assert!(sink.is_empty());
+    }
+
+    struct FailingReader;
+
+    impl Read for FailingReader {
+        fn read(&mut self, _buf: &mut [u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::ConnectionReset, "peer gone"))
+        }
+    }
+
+    struct FailingWriter;
+
+    impl Write for FailingWriter {
+        fn write(&mut self, _buf: &[u8]) -> io::Result<usize> {
+            Err(io::Error::new(io::ErrorKind::StorageFull, "disk full"))
+        }
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn source_and_sink_failures_stay_distinguishable() {
+        let mut buf = vec![0u8; DOWNLOAD_BUFFER_BYTES];
+        let mut written = 0u64;
+        let err =
+            stream_body(&mut FailingReader, &mut Vec::new(), &mut buf, &mut written).unwrap_err();
+        assert!(matches!(err, DownloadError::Source(_)), "{err:?}");
+        assert_eq!(written, 0);
+
+        let mut src = PatternReader {
+            remaining: 1024,
+            offset: 0,
+            max_buf_seen: 0,
+        };
+        let mut written = 0u64;
+        let err = stream_body(&mut src, &mut FailingWriter, &mut buf, &mut written).unwrap_err();
+        assert!(matches!(err, DownloadError::Sink(_)), "{err:?}");
+        // Nothing the sink rejected may be counted as delivered.
+        assert_eq!(written, 0);
+    }
+
+    #[test]
+    fn interrupted_reads_resume_instead_of_failing() {
+        struct InterruptOnce {
+            done: bool,
+            payload: Vec<u8>,
+        }
+        impl Read for InterruptOnce {
+            fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
+                if !self.done {
+                    self.done = true;
+                    return Err(io::Error::new(io::ErrorKind::Interrupted, "signal"));
+                }
+                let n = buf.len().min(self.payload.len());
+                buf[..n].copy_from_slice(&self.payload[..n]);
+                self.payload.drain(..n);
+                Ok(n)
+            }
+        }
+        let mut src = InterruptOnce {
+            done: false,
+            payload: b"hello".to_vec(),
+        };
+        let mut sink = Vec::new();
+        let mut buf = vec![0u8; DOWNLOAD_BUFFER_BYTES];
+        let mut written = 0u64;
+        let n = stream_body(&mut src, &mut sink, &mut buf, &mut written).unwrap();
+        assert_eq!(n, 5);
+        assert_eq!(sink, b"hello");
     }
 }

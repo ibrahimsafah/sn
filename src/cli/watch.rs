@@ -30,6 +30,26 @@
 //! insert, update and delete touching a matching record, and there is no way to
 //! ask the server for a subset. `--operation` and `--on-change` therefore filter
 //! here, before hydration, so an unwanted event costs nothing.
+//!
+//! ## Gaps: the stream is best-effort, and says where it broke
+//!
+//! AMB has no replay and no cursor. A subscription starts at "now", so every
+//! change that happened while a session was down is simply gone — no later
+//! message carries it, and a reconnect cannot ask for it. A watch is therefore a
+//! best-effort feed, not a log; anything that must be complete has to be
+//! reconciled against the table itself over the outage window.
+//!
+//! What the watcher can do honestly is say *where* the hole is. On a successful
+//! resubscribe after a drop it writes one synthetic line:
+//!
+//! ```text
+//! {"sn_watch":"reconnected","downtime_ms":4100,"attempt":2}
+//! ```
+//!
+//! Everything between the preceding line and that marker is missing. Without it
+//! a consumer cannot tell a quiet table from a lost one, which is the failure
+//! this shape exists to prevent — see [`gap_marker`] for why it is keyed rather
+//! than shaped like an event, and [`Stream`] for why it is not counted as one.
 
 use crate::amb::{self, Amb, Event};
 use crate::cli::table::{build_client, build_profile, DisplayValueArg};
@@ -315,10 +335,16 @@ fn watch(global: &GlobalFlags, plan: Plan) -> Result<()> {
         .duration
         .map(|s| Instant::now() + Duration::from_secs(s));
     let idle = plan.limits.idle_timeout.map(Duration::from_secs);
-    let mut emitted: u64 = 0;
+    // Held for the whole command rather than taken per line: nothing else in a
+    // watch writes to stdout (`log_note` goes to stderr), so there is no one to
+    // interleave with.
+    let mut stream = Stream::new(io::stdout().lock(), plan.limits.max_events);
+
     let mut attempt: u32 = 0;
     // Retrying is only ever right for a connection that once worked.
     let mut established = false;
+    // Armed only after a drop, so the first session announces nothing.
+    let mut gap: Option<Gap> = None;
 
     loop {
         let started = Instant::now();
@@ -331,33 +357,28 @@ fn watch(global: &GlobalFlags, plan: Plan) -> Result<()> {
             &stop,
             deadline,
             idle,
-            &mut emitted,
+            &mut stream,
             &mut established,
+            &mut gap,
         );
+        let ended = Instant::now();
 
-        match outcome {
-            Ok(()) => return Ok(()),
-            // Never got off the ground: the instance, the profile or AMB itself
-            // is wrong, and retrying ten times over six minutes only postpones
-            // the same error. Report it now.
-            Err(e) if !established => return Err(e),
-            Err(e) if !is_recoverable(&e) => return Err(e),
-            Err(e) => {
-                // Ctrl-C or a deadline racing the socket teardown is not a failure.
-                if stop.load(Ordering::SeqCst) || past(deadline) {
-                    return Ok(());
-                }
-                // A session that stayed up was healthy; its death starts a new
-                // problem, so don't carry the old backoff into it.
-                attempt = if started.elapsed() >= HEALTHY {
-                    1
-                } else {
-                    attempt + 1
-                };
-                if attempt > MAX_RECONNECT_ATTEMPTS {
-                    return Err(e);
-                }
-                let wait = backoff(attempt);
+        let next = decide(&SessionEnd {
+            error: outcome.as_ref().err(),
+            established,
+            lifetime: ended - started,
+            attempt,
+            stopping: stop.load(Ordering::SeqCst) || past(deadline),
+        });
+        match next {
+            Next::Stop => return Ok(()),
+            Next::Fail => return outcome,
+            Next::Retry {
+                attempt: next_attempt,
+                wait,
+            } => {
+                attempt = next_attempt;
+                let e = outcome.expect_err("Next::Retry is only reachable with an error");
                 log_note(&format!(
                     "amb: {e}; reconnecting in {}s (attempt {attempt}/{MAX_RECONNECT_ATTEMPTS})",
                     wait.as_secs()
@@ -365,15 +386,184 @@ fn watch(global: &GlobalFlags, plan: Plan) -> Result<()> {
                 if !sleep_interruptibly(wait, &stop, deadline) {
                     return Ok(());
                 }
+                gap = Some(extend(gap, ended, attempt));
             }
         }
+    }
+}
+
+/// What the supervisor does once a session has ended.
+#[derive(Debug, PartialEq, Eq)]
+enum Next {
+    /// Exit 0: a limit was reached, or the caller asked to stop.
+    Stop,
+    /// Give up and report the session's error.
+    Fail,
+    /// Wait, then open a replacement session.
+    Retry { attempt: u32, wait: Duration },
+}
+
+/// Everything the post-session decision depends on, as plain data.
+///
+/// The reconnect policy is the part of the supervisor worth testing and the
+/// socket is the part that makes testing it expensive, so they are separated:
+/// [`decide`] is pure, and the loop above only carries out its verdict.
+struct SessionEnd<'a> {
+    /// `None` when the session returned cleanly.
+    error: Option<&'a Error>,
+    /// Whether any session so far reached the subscribed state.
+    established: bool,
+    /// How long the session that just ended lasted.
+    lifetime: Duration,
+    /// Consecutive failed reconnects *before* this one.
+    attempt: u32,
+    /// Ctrl-C fired, or the overall `--duration` deadline passed.
+    stopping: bool,
+}
+
+/// The whole reconnect policy. Order matters: an error is disqualified before
+/// Ctrl-C is consulted, so a genuinely broken configuration still exits non-zero
+/// even if the caller interrupted while it was failing.
+fn decide(end: &SessionEnd<'_>) -> Next {
+    let Some(e) = end.error else {
+        return Next::Stop;
+    };
+    // Never got off the ground: the instance, the profile or AMB itself is
+    // wrong, and retrying ten times over six minutes only postpones the same
+    // error. Report it now. Likewise for an error that will reproduce exactly.
+    if !end.established || !is_recoverable(e) {
+        return Next::Fail;
+    }
+    // Ctrl-C or a deadline racing the socket teardown is not a failure.
+    if end.stopping {
+        return Next::Stop;
+    }
+    // A session that stayed up was healthy; its death starts a new problem, so
+    // don't carry the old backoff into it.
+    let attempt = if end.lifetime >= HEALTHY {
+        1
+    } else {
+        end.attempt + 1
+    };
+    if attempt > MAX_RECONNECT_ATTEMPTS {
+        return Next::Fail;
+    }
+    Next::Retry {
+        attempt,
+        wait: backoff(attempt),
+    }
+}
+
+/// A hole in the stream: the interval between one session dropping and its
+/// replacement being subscribed. Outlives a failed attempt, so a gap that takes
+/// several tries to close is still reported as one interval.
+#[derive(Clone, Copy)]
+struct Gap {
+    /// When the session whose loss opened the hole died.
+    since: Instant,
+    /// Which reconnect attempt closed it.
+    attempt: u32,
+}
+
+/// Fold a fresh drop into whatever gap is still waiting to be announced.
+///
+/// One hole, however many attempts it takes to close. A gap still pending here
+/// belongs to an attempt that died before it could announce anything, so its
+/// start time carries forward: the consumer needs the whole outage, not the last
+/// slice of it. `attempt` always takes the newest value — it is the counter the
+/// backoff is on, and the marker reports which try finally worked.
+fn extend(gap: Option<Gap>, dropped_at: Instant, attempt: u32) -> Gap {
+    Gap {
+        since: gap.map_or(dropped_at, |g| g.since),
+        attempt,
+    }
+}
+
+/// The line that marks a hole.
+///
+/// AMB has no replay, so whatever changed during `downtime_ms` is gone and no
+/// later message will carry it. This marker is the only evidence a consumer ever
+/// gets that its feed is incomplete, which drives both of its properties:
+///
+/// - **It is keyed, not shaped like an event.** `sn_watch` appears on nothing
+///   else, and the marker deliberately carries neither `operation` nor `changes`
+///   — the two fields `--operation`/`--on-change` match on, and the two a
+///   consumer's own `jq` predicate is most likely to test. A marker that looked
+///   like an event would be silently dropped by exactly the pipelines that most
+///   need to see it.
+/// - **It is not an event.** See [`Stream`]: it moves neither `--max-events` nor
+///   the `--idle-timeout` clock.
+fn gap_marker(downtime: Duration, attempt: u32) -> Value {
+    json!({
+        "sn_watch": "reconnected",
+        // serde_json numbers top out at u64; a watcher would have to be down for
+        // half a billion years to reach that, but saturating beats a panic.
+        "downtime_ms": u64::try_from(downtime.as_millis()).unwrap_or(u64::MAX),
+        "attempt": attempt,
+    })
+}
+
+/// The output side of a watch, plus the two limits that bound it.
+///
+/// It is its own type because of one rule that is easy to state and easy to
+/// break: **a meta line is not an event**. `--max-events` counts the records the
+/// caller asked for, and `--idle-timeout` asks whether a record arrived — so a
+/// supervisor notice must move neither counter. Otherwise a flapping connection
+/// would spend the caller's event budget on its own chatter, and keep alive a
+/// watcher that has delivered nothing.
+struct Stream<W: Write> {
+    out: W,
+    max_events: Option<u64>,
+    emitted: u64,
+    /// When the last *event* went out. Deliberately not reset by a new session:
+    /// an outage is time during which no event arrived, which is precisely what
+    /// `--idle-timeout` asks about. (Before the reconnect marker existed, each
+    /// session restarted this clock, so a connection that flapped faster than
+    /// the timeout could hold a silent watcher open forever.)
+    last_event: Instant,
+}
+
+impl<W: Write> Stream<W> {
+    fn new(out: W, max_events: Option<u64>) -> Self {
+        Self {
+            out,
+            max_events,
+            emitted: 0,
+            last_event: Instant::now(),
+        }
+    }
+
+    /// Emit an event. Returns true once `--max-events` is satisfied.
+    fn event(&mut self, v: &Value) -> Result<bool> {
+        self.write(v)?;
+        self.emitted += 1;
+        self.last_event = Instant::now();
+        Ok(self.max_events.is_some_and(|m| self.emitted >= m))
+    }
+
+    /// Emit a supervisor notice. See the type doc: not an event, so neither
+    /// counter moves.
+    fn meta(&mut self, v: &Value) -> Result<()> {
+        self.write(v)
+    }
+
+    fn idle_expired(&self, idle: Option<Duration>) -> bool {
+        idle.is_some_and(|i| self.last_event.elapsed() >= i)
+    }
+
+    /// One JSON value per line, flushed immediately. Without the flush a piped
+    /// stdout is block-buffered and `sn watch … | jq` would look frozen for
+    /// minutes.
+    fn write(&mut self, v: &Value) -> Result<()> {
+        write_jsonl_line(&mut self.out, v)?;
+        self.out.flush().map_err(map_stdout_err)
     }
 }
 
 /// One socket lifetime: mint a session, connect, subscribe, pump until a limit
 /// is reached or the connection breaks.
 #[allow(clippy::too_many_arguments)]
-fn session(
+fn session<W: Write>(
     client: &Client,
     base: &str,
     connect_timeout: Duration,
@@ -382,8 +572,9 @@ fn session(
     stop: &Arc<AtomicBool>,
     deadline: Option<Instant>,
     idle: Option<Duration>,
-    emitted: &mut u64,
+    stream: &mut Stream<W>,
     established: &mut bool,
+    gap: &mut Option<Gap>,
 ) -> Result<()> {
     // The quirk: AMB authenticates by session cookie, so an ordinary HTTP call
     // has to mint one before the socket can be opened. Goes out over the normal
@@ -399,27 +590,33 @@ fn session(
     *established = true;
     log_note(&format!("amb: subscribed to {}", plan.channels.join(", ")));
 
-    let result = pump(&mut amb, client, plan, stop, deadline, idle, emitted);
+    // Announce the hole only now, and clear it only here. An attempt that dies
+    // before this point has closed nothing, so it leaves the gap standing for
+    // its successor to report in full — one marker per gap, not one per attempt.
+    if let Some(g) = gap.take() {
+        stream.meta(&gap_marker(g.since.elapsed(), g.attempt))?;
+    }
+
+    let result = pump(&mut amb, client, plan, stop, deadline, idle, stream);
     amb.disconnect();
     result
 }
 
 #[allow(clippy::too_many_arguments)]
-fn pump(
+fn pump<W: Write>(
     amb: &mut Amb,
     client: &Client,
     plan: &Plan,
     stop: &Arc<AtomicBool>,
     deadline: Option<Instant>,
     idle: Option<Duration>,
-    emitted: &mut u64,
+    stream: &mut Stream<W>,
 ) -> Result<()> {
-    let mut last = Instant::now();
     loop {
         if stop.load(Ordering::SeqCst) || past(deadline) {
             return Ok(());
         }
-        if idle.is_some_and(|i| last.elapsed() >= i) {
+        if stream.idle_expired(idle) {
             return Ok(());
         }
 
@@ -433,10 +630,7 @@ fn pump(
             if !plan.filter.accepts(&event.data) {
                 continue;
             }
-            last = Instant::now();
-            emit(&shape(event, client, plan.hydrate.as_ref()))?;
-            *emitted += 1;
-            if plan.limits.max_events.is_some_and(|m| *emitted >= m) {
+            if stream.event(&shape(event, client, plan.hydrate.as_ref()))? {
                 return Ok(());
             }
         }
@@ -478,8 +672,7 @@ fn shape(event: Event, client: &Client, hydrate: Option<&Hydrate>) -> Value {
         &h.query.to_pairs(),
     ) {
         Ok(v) => {
-            let record = v.get("result").cloned().unwrap_or(v);
-            obj.insert("record".into(), record);
+            obj.insert("record".into(), take_result(v));
         }
         Err(e) => {
             obj.insert("record".into(), Value::Null);
@@ -489,12 +682,20 @@ fn shape(event: Event, client: &Client, hydrate: Option<&Hydrate>) -> Value {
     data
 }
 
-/// One event per line, flushed immediately. Without the flush a piped stdout is
-/// block-buffered and `sn watch … | jq` would look frozen for minutes.
-fn emit(value: &Value) -> Result<()> {
-    let mut out = io::stdout().lock();
-    write_jsonl_line(&mut out, value)?;
-    out.flush().map_err(map_stdout_err)
+/// Unwrap a `{"result": …}` envelope by moving the subtree out.
+///
+/// Every other command unwraps once per invocation; hydration does it once per
+/// *event*, for the lifetime of the stream. Cloning the subtree out of a value
+/// that is about to be dropped (`v.get("result").cloned().unwrap_or(v)`) copies
+/// the whole record on every event for nothing.
+fn take_result(v: Value) -> Value {
+    match v {
+        Value::Object(mut m) => match m.remove("result") {
+            Some(r) => r,
+            None => Value::Object(m),
+        },
+        other => other,
+    }
 }
 
 /// The websocket is opened directly rather than through reqwest, so it does not
@@ -676,6 +877,254 @@ mod tests {
             ..Default::default()
         }
         .accepts(&bare));
+    }
+
+    // ── the reconnect gap marker ────────────────────────────────────────────
+
+    #[test]
+    fn the_marker_reports_the_downtime_and_the_attempt() {
+        assert_eq!(
+            gap_marker(Duration::from_millis(4100), 2),
+            json!({"sn_watch": "reconnected", "downtime_ms": 4100, "attempt": 2})
+        );
+    }
+
+    #[test]
+    fn an_absurd_downtime_saturates_rather_than_panicking() {
+        // `as_millis` is u128 and serde_json numbers are u64. Unreachable in
+        // practice; a panic in the one line that reports a fault is not.
+        let m = gap_marker(Duration::from_secs(u64::MAX), 1);
+        assert_eq!(m["downtime_ms"], json!(u64::MAX));
+    }
+
+    #[test]
+    fn the_marker_is_not_shaped_like_an_event() {
+        // Its whole job is to survive filtering. `--operation`/`--on-change`
+        // match on these two keys, and so does the average consumer's own jq
+        // predicate — a marker carrying either could be mistaken for a record
+        // change, and one carrying neither can only be recognised by its key.
+        let m = gap_marker(Duration::from_secs(1), 1);
+        assert!(m.get("operation").is_none(), "{m}");
+        assert!(m.get("changes").is_none(), "{m}");
+        assert!(m.get("record").is_none(), "{m}");
+        assert_eq!(m["sn_watch"], "reconnected");
+    }
+
+    #[test]
+    fn a_gap_that_takes_several_attempts_is_still_one_interval() {
+        // Attempt 1 dies before it can subscribe, so it announces nothing. The
+        // downtime attempt 2 reports has to span the whole outage, not just the
+        // part after attempt 1 gave up.
+        let drop = Instant::now();
+        let first = extend(None, drop, 1);
+        let second = extend(Some(first), drop + Duration::from_secs(5), 2);
+        assert_eq!(second.since, drop, "the hole opened once");
+        assert_eq!(
+            second.attempt, 2,
+            "reported as closed by the try that worked"
+        );
+    }
+
+    #[test]
+    fn a_fresh_drop_after_an_announced_gap_starts_a_new_interval() {
+        // `session` clears the gap once it has emitted the marker, so the next
+        // drop must time from itself rather than from the previous outage.
+        let drop = Instant::now();
+        assert_eq!(extend(None, drop, 1).since, drop);
+    }
+
+    // ── Stream: a meta line is not an event ─────────────────────────────────
+
+    /// A stream writing into a buffer, so the bytes a consumer would see are
+    /// what the assertions look at.
+    fn buffered(max_events: Option<u64>) -> Stream<Vec<u8>> {
+        Stream::new(Vec::new(), max_events)
+    }
+
+    fn lines(s: &Stream<Vec<u8>>) -> Vec<Value> {
+        String::from_utf8(s.out.clone())
+            .expect("output is utf-8")
+            .lines()
+            .map(|l| serde_json::from_str(l).expect("each line is one JSON value"))
+            .collect()
+    }
+
+    #[test]
+    fn a_meta_line_does_not_count_against_max_events() {
+        let mut s = buffered(Some(2));
+        s.meta(&gap_marker(Duration::from_secs(4), 1)).unwrap();
+        s.meta(&gap_marker(Duration::from_secs(4), 2)).unwrap();
+        s.meta(&gap_marker(Duration::from_secs(4), 3)).unwrap();
+        assert!(
+            !s.event(&update()).unwrap(),
+            "three markers must not have consumed a budget of two events"
+        );
+        assert!(s.event(&update()).unwrap(), "the second event satisfies it");
+    }
+
+    #[test]
+    fn a_meta_line_does_not_reset_the_idle_clock() {
+        let idle = Some(Duration::from_millis(5));
+        let mut s = buffered(None);
+        std::thread::sleep(Duration::from_millis(30));
+        assert!(s.idle_expired(idle), "nothing has arrived");
+
+        s.meta(&gap_marker(Duration::from_secs(4), 1)).unwrap();
+        assert!(
+            s.idle_expired(idle),
+            "a reconnect notice is not an arrival: --idle-timeout must still fire"
+        );
+
+        s.event(&update()).unwrap();
+        assert!(!s.idle_expired(idle), "a real event does reset it");
+    }
+
+    #[test]
+    fn max_events_is_satisfied_by_the_nth_event_and_never_without_one() {
+        let mut s = buffered(Some(1));
+        assert!(s.event(&insert()).unwrap());
+
+        let mut unbounded = buffered(None);
+        for _ in 0..50 {
+            assert!(!unbounded.event(&insert()).unwrap());
+        }
+    }
+
+    #[test]
+    fn every_value_is_one_flushed_jsonl_line() {
+        let mut s = buffered(None);
+        s.event(&insert()).unwrap();
+        s.meta(&gap_marker(Duration::from_millis(4100), 2)).unwrap();
+        s.event(&update()).unwrap();
+
+        let out = lines(&s);
+        assert_eq!(out.len(), 3, "one line per value: {out:?}");
+        // The acceptance criterion: the marker sits between the pre-drop and
+        // post-drop events, so a consumer can place the hole exactly.
+        assert_eq!(out[0]["operation"], "insert");
+        assert_eq!(out[1]["sn_watch"], "reconnected");
+        assert_eq!(out[2]["operation"], "update");
+    }
+
+    // ── the reconnect policy ────────────────────────────────────────────────
+
+    fn ended(error: Option<&Error>) -> SessionEnd<'_> {
+        SessionEnd {
+            error,
+            established: true,
+            lifetime: Duration::from_secs(1),
+            attempt: 0,
+            stopping: false,
+        }
+    }
+
+    fn dropped() -> Error {
+        Error::Transport("amb websocket closed".into())
+    }
+
+    #[test]
+    fn a_clean_session_stops() {
+        assert_eq!(decide(&ended(None)), Next::Stop);
+    }
+
+    #[test]
+    fn a_connection_that_never_established_fails_instead_of_retrying() {
+        // Ten backoff rounds is ~6 minutes of postponing the same error.
+        let e = dropped();
+        let end = SessionEnd {
+            established: false,
+            ..ended(Some(&e))
+        };
+        assert_eq!(decide(&end), Next::Fail);
+    }
+
+    #[test]
+    fn an_unrecoverable_error_fails_even_after_establishing() {
+        let e = Error::Auth {
+            status: 401,
+            message: "nope".into(),
+            transaction_id: None,
+        };
+        assert_eq!(decide(&ended(Some(&e))), Next::Fail);
+    }
+
+    #[test]
+    fn ctrl_c_racing_the_teardown_is_not_a_failure() {
+        let e = dropped();
+        let end = SessionEnd {
+            stopping: true,
+            ..ended(Some(&e))
+        };
+        assert_eq!(decide(&end), Next::Stop);
+    }
+
+    #[test]
+    fn consecutive_short_sessions_escalate_the_backoff() {
+        let e = dropped();
+        let short = Duration::from_secs(1);
+        for (attempt, wait) in [(0u32, 2u64), (1, 4), (2, 8)] {
+            assert_eq!(
+                decide(&SessionEnd {
+                    lifetime: short,
+                    attempt,
+                    ..ended(Some(&e))
+                }),
+                Next::Retry {
+                    attempt: attempt + 1,
+                    wait: Duration::from_secs(wait)
+                }
+            );
+        }
+    }
+
+    #[test]
+    fn a_healthy_session_restarts_the_backoff_and_the_budget() {
+        // A watcher running for days must not be capped at ten lifetime
+        // reconnects, so a session that stayed up resets the counter — even one
+        // that had already exhausted it.
+        let e = dropped();
+        assert_eq!(
+            decide(&SessionEnd {
+                lifetime: HEALTHY,
+                attempt: MAX_RECONNECT_ATTEMPTS,
+                ..ended(Some(&e))
+            }),
+            Next::Retry {
+                attempt: 1,
+                wait: Duration::from_secs(2)
+            }
+        );
+    }
+
+    #[test]
+    fn a_reconnect_storm_gives_up_after_the_cap() {
+        let e = dropped();
+        assert_eq!(
+            decide(&SessionEnd {
+                lifetime: Duration::from_secs(1),
+                attempt: MAX_RECONNECT_ATTEMPTS,
+                ..ended(Some(&e))
+            }),
+            Next::Fail
+        );
+    }
+
+    // ── hydration envelope ──────────────────────────────────────────────────
+
+    #[test]
+    fn take_result_unwraps_the_envelope() {
+        let row = json!({"sys_id": "abc", "number": "INC0001"});
+        assert_eq!(take_result(json!({"result": row.clone()})), row);
+    }
+
+    #[test]
+    fn take_result_keeps_a_body_that_has_no_envelope() {
+        // Some responses arrive already unwrapped; dropping them would replace
+        // the record with null.
+        let bare = json!({"sys_id": "abc"});
+        assert_eq!(take_result(bare.clone()), bare);
+        assert_eq!(take_result(json!([1, 2])), json!([1, 2]));
+        assert_eq!(take_result(Value::Null), Value::Null);
     }
 
     #[test]

@@ -1,8 +1,7 @@
 use crate::cli::{DisplayValueArg, GlobalFlags};
 use crate::error::Result;
-use crate::output::emit_value;
 
-use super::table::{bool_opt, build_client, build_profile, format_from_flags, unwrap_or_raw};
+use super::table::{bool_opt, build_client, build_profile, unwrap_or_raw, write_response};
 
 #[derive(clap::Args, Debug)]
 pub struct AggregateArgs {
@@ -91,6 +90,5 @@ pub fn run(global: &GlobalFlags, args: AggregateArgs) -> Result<()> {
     let path = format!("/api/now/stats/{}", args.table);
     let resp = client.get(&path, &q)?;
     let out = unwrap_or_raw(resp, global.output);
-    emit_value(std::io::stdout().lock(), &out, format_from_flags(global))
-        .map_err(crate::output::map_stdout_err)
+    write_response(global, &out)
 }

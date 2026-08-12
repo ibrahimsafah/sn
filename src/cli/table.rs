@@ -275,6 +275,8 @@ pub fn list(global: &GlobalFlags, args: TableListArgs) -> Result<()> {
     let path = format!("/api/now/table/{}", args.table);
 
     if paginate {
+        reject_unstreamable_output(global.output, array)?;
+
         let cap = if max_records == 0 {
             None
         } else {
@@ -374,7 +376,11 @@ pub(crate) fn bool_opt(b: bool) -> Option<bool> {
     }
 }
 
-pub(crate) fn format_from_flags(g: &GlobalFlags) -> ResolvedFormat {
+/// Private on purpose: `write_response` is the single place a command's final
+/// value reaches stdout, and it is the only thing that routes `--output table`.
+/// Every module that reached for this instead silently ignored that flag, so
+/// keeping it unreachable makes the convention a compile error to break.
+fn format_from_flags(g: &GlobalFlags) -> ResolvedFormat {
     if g.pretty {
         Format::Pretty.resolve()
     } else if g.compact {
@@ -388,6 +394,35 @@ pub(crate) fn unwrap_or_raw(v: Value, mode: OutputMode) -> Value {
     match mode {
         OutputMode::Raw => v,
         OutputMode::Default | OutputMode::Table => v.get("result").cloned().unwrap_or(v),
+    }
+}
+
+/// Refuse the `--output` modes that `--all` cannot honor, instead of accepting
+/// the flag and emitting JSONL anyway.
+///
+/// `--all` streams: the paginator flattens every page's `result` envelope into a
+/// record-at-a-time iterator of unbounded length.
+/// - `--output raw` means "keep the envelope", and after that flattening there
+///   is no envelope left to keep — in the `--array` form either, which is why
+///   this rejects raw for both.
+/// - `--output table` has to see every row before it can size a column, so it
+///   cannot render a stream. `--array` buffers the whole result set (bounded by
+///   `--max-records`), which is exactly what the renderer needs — so that form
+///   is allowed, and is what the error points at.
+fn reject_unstreamable_output(mode: OutputMode, array: bool) -> Result<()> {
+    match mode {
+        OutputMode::Raw => Err(Error::Usage(
+            "--output raw cannot be combined with --all: pagination flattens each page's \
+             envelope into a record stream, so there is no envelope to keep; drop --all and \
+             page with --offset/--setlimit, or drop --output raw"
+                .into(),
+        )),
+        OutputMode::Table if !array => Err(Error::Usage(
+            "--output table cannot render the unbounded stream --all produces; add --array to \
+             buffer the records (capped by --max-records), or drop --all"
+                .into(),
+        )),
+        _ => Ok(()),
     }
 }
 

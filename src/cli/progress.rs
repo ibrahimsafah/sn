@@ -32,7 +32,12 @@ pub(crate) fn finish_cicd(
     wait_timeout: Option<u64>,
 ) -> Result<()> {
     if wait {
-        if let Some(progress_id) = out
+        // Callers hand `out` over already shaped by `--output`, so under `raw`
+        // the progress link sits one level down inside the untouched envelope.
+        // Looking only at the top level made `--wait` a no-op there: no link
+        // found, no polling, initial response emitted as if it were final.
+        let body = out.get("result").unwrap_or(&out);
+        if let Some(progress_id) = body
             .get("links")
             .and_then(|l| l.get("progress"))
             .and_then(|p| p.get("id"))
@@ -47,8 +52,8 @@ pub(crate) fn finish_cicd(
 
 /// Poll `GET /api/sn_cicd/progress/{progress_id}` in a loop until the operation
 /// reaches a terminal state (Successful, Failed, or Cancelled) and return the
-/// final result value. `wait_timeout` bounds the total wait in seconds; `None`
-/// waits indefinitely.
+/// final result value, shaped by `global.output` like any other response.
+/// `wait_timeout` bounds the total wait in seconds; `None` waits indefinitely.
 ///
 /// Status codes:
 /// - "0" = Pending, "1" = Running, "2" = Successful, "3" = Failed, "4" = Cancelled
@@ -63,19 +68,25 @@ pub(crate) fn wait_for_completion(
         wait_timeout.map(|secs| std::time::Instant::now() + std::time::Duration::from_secs(secs));
     loop {
         let resp = client.get(&path, &[])?;
-        let result = unwrap_or_raw(resp, OutputMode::Default);
+        // Poll decisions always read the unwrapped body — `status` lives inside
+        // the `result` envelope — but what the caller finally sees is theirs to
+        // choose, so `--output raw` still hands back the envelope it asked for.
+        let result = unwrap_or_raw(resp.clone(), OutputMode::Default);
 
         let status = result.get("status").and_then(|s| s.as_str()).unwrap_or("1");
 
         match status {
-            "2" => return Ok(result),
+            "2" => return Ok(unwrap_or_raw(resp, global.output)),
             "3" | "4" => {
                 let msg = result
                     .get("status_message")
                     .and_then(|s| s.as_str())
                     .unwrap_or("operation failed");
+                // The HTTP call succeeded; the *operation* failed. There is no
+                // HTTP status to report, and the envelope must omit the key
+                // rather than invent one.
                 return Err(Error::Api {
-                    status: 0,
+                    status: crate::error::NO_HTTP_STATUS,
                     message: msg.to_string(),
                     detail: result
                         .get("status_detail")

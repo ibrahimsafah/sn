@@ -1,4 +1,4 @@
-use crate::cli::profile::{resolve_input, resolve_name, save_and_verify, ProfileAddArgs};
+use crate::cli::profile::{resolve_input, resolve_name, save_and_verify, Caller, ProfileAddArgs};
 use crate::cli::GlobalFlags;
 use crate::config::{AuthMethod, OAuthGrant};
 use crate::error::Result;
@@ -69,8 +69,11 @@ pub fn run(global: &GlobalFlags, args: InitArgs) -> Result<()> {
 
     // Unlike `sn profile add`, a nameless `sn init` is the documented way to set
     // up the first profile, so the name falls back to "default".
-    let name = resolve_name(&add, Some("default".into()))?;
-    let input = resolve_input(&add, name)?;
+    // `Caller::Init` is what keeps a missing-field error from naming
+    // `--password-stdin` / `--non-interactive`: flags the shared core has but
+    // `sn init` does not accept.
+    let name = resolve_name(&add, Some("default".into()), Caller::Init)?;
+    let input = resolve_input(&add, name, Caller::Init)?;
     let user = save_and_verify(global, &input, true, true)?;
 
     let (name, instance) = (&input.name, &input.instance);

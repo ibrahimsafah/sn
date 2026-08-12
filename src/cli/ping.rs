@@ -1,4 +1,4 @@
-use crate::cli::auth::{identify, Identity};
+use crate::cli::auth::{identify, non_empty, Identity};
 use crate::cli::table::{build_client, build_profile, write_response};
 use crate::cli::GlobalFlags;
 use crate::client::Client;
@@ -44,8 +44,10 @@ pub fn run(global: &GlobalFlags) -> Result<()> {
         Some(s) => {
             admin = s.admin.map_or(Value::Null, Value::from);
             can_impersonate = s.can_impersonate.map_or(Value::Null, Value::from);
-            // Only meaningful when the endpoint reported both names; a missing
-            // OriginalUser is unknown, not "not impersonating".
+            // Only meaningful when the endpoint reported both names, and
+            // `probe_session` guarantees each is a real (non-blank) name — so
+            // `impersonating` is true only when two present names differ. A
+            // missing or blank OriginalUser stays null: unknown, not "no".
             if let Some(orig) = &s.original_user {
                 impersonating = Value::from(orig != &s.user_name);
                 original_user = Value::from(orig.clone());
@@ -140,12 +142,7 @@ fn probe_session(client: &Client) -> Result<Option<Session>> {
     // every other ServiceNow endpoint uses. Anything else — including a future
     // release that wraps it — fails the `CurrentUser` check below and falls back
     // rather than reporting a name it cannot locate.
-    let Some(user_name) = v
-        .get("CurrentUser")
-        .and_then(Value::as_str)
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-    else {
+    let Some(user_name) = non_empty(v.get("CurrentUser")) else {
         observability::log_note(
             "impersonation session response did not name a current user; falling back",
         );
@@ -156,11 +153,12 @@ fn probe_session(client: &Client) -> Result<Option<Session>> {
     // credential for this session — is deliberately not among them, and must
     // never be: it is worthless to a ping and dangerous in a transcript.
     Ok(Some(Session {
-        user_name: user_name.to_string(),
-        original_user: v
-            .get("OriginalUser")
-            .and_then(Value::as_str)
-            .map(ToString::to_string),
+        user_name,
+        // Same `non_empty` guard as `CurrentUser`, and for the same reason: a
+        // blank `OriginalUser` taken at face value differs from the current user
+        // and would be reported as an impersonated session that isn't happening.
+        // An impersonation claim is an accusation; it needs two real names.
+        original_user: non_empty(v.get("OriginalUser")),
         admin: v.get("admin").and_then(Value::as_bool),
         can_impersonate: v.get("CanImpersonate").and_then(Value::as_bool),
     }))

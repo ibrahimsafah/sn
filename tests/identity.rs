@@ -175,6 +175,43 @@ async fn ping_reports_an_impersonated_session() {
 }
 
 #[tokio::test(flavor = "current_thread")]
+async fn a_blank_original_user_is_not_an_impersonated_session() {
+    // A blank `OriginalUser` differs from the current user as a string, so taken
+    // at face value it reports an impersonation that is not happening — a
+    // confident falsehood about identity, which is the class of bug this whole
+    // command exists to remove. Unknown must stay unknown.
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        SESSION_PATH,
+        200,
+        json!({
+            "CanImpersonate": true,
+            "CurrentUser": "abeyahmad",
+            "OriginalUser": "   ",
+            "admin": true,
+        }),
+        1,
+    )
+    .await;
+    let uri = server.uri();
+
+    let (code, stdout, stderr) = tokio::task::spawn_blocking(move || run(&uri, &["ping"]))
+        .await
+        .unwrap();
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let v = ping_json(&stdout);
+    assert_eq!(v["username"], json!("abeyahmad"));
+    assert_eq!(
+        v["impersonating"],
+        Value::Null,
+        "a blank OriginalUser is unknown, not an impersonation:\n{stdout}"
+    );
+    assert_eq!(v["original_user"], Value::Null);
+}
+
+#[tokio::test(flavor = "current_thread")]
 async fn ping_prefers_the_instance_identity_over_the_configured_username() {
     // The profile says `real_user`; the instance says otherwise. Echoing the
     // config back would verify nothing — the config is the thing under test.
@@ -471,6 +508,9 @@ async fn profile_add_verification_reports_no_user_when_the_term_is_dropped() {
 #[tokio::test(flavor = "current_thread")]
 async fn user_me_refuses_arbitrary_rows_when_the_term_is_dropped() {
     let server = MockServer::start().await;
+    // No `current_user` on this instance, so `user me` is on the scripted rung —
+    // the one that can be sabotaged.
+    mount(&server, CURRENT_USER_PATH, 404, json!({}), 1).await;
     Mock::given(method("GET"))
         .and(path(SYS_USER_PATH))
         .and(query_param("sysparm_limit", "2"))
@@ -493,11 +533,121 @@ async fn user_me_refuses_arbitrary_rows_when_the_term_is_dropped() {
         stderr.contains("arbitrary"),
         "error must explain the dropped query, got:\n{stderr}"
     );
+    // The HTTP call was a 200. There is no HTTP error status to report, and
+    // `status_code: 200` on a failure is a fabrication agents branch on — the
+    // key must be absent, not present-and-wrong.
+    let err: Value = serde_json::from_str(stderr.trim()).expect("stderr is a JSON envelope");
+    assert!(
+        err["error"].get("status_code").is_none(),
+        "a 200 response must not be reported as an HTTP failure status:\n{stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn user_me_reports_no_record_without_inventing_a_status() {
+    // Same rule on the empty-result path next door: nothing came back, but
+    // nothing about that is HTTP 200 either.
+    let server = MockServer::start().await;
+    mount(&server, CURRENT_USER_PATH, 404, json!({}), 1).await;
+    mount_sys_user(&server, json!([]), 1).await;
+    let uri = server.uri();
+
+    let (code, stdout, stderr) = tokio::task::spawn_blocking(move || run(&uri, &["user", "me"]))
+        .await
+        .unwrap();
+
+    assert_eq!(code, 2, "stderr: {stderr}");
+    assert!(stdout.is_empty());
+    let err: Value = serde_json::from_str(stderr.trim()).expect("stderr is a JSON envelope");
+    assert!(
+        err["error"].get("status_code").is_none(),
+        "no HTTP failure occurred, so no status may be reported:\n{stderr}"
+    );
+}
+
+// -----------------------------------------------------------------------------
+// `sn user me` prefers the endpoint that needs no scripted query at all.
+// -----------------------------------------------------------------------------
+
+#[tokio::test(flavor = "current_thread")]
+async fn user_me_reads_the_record_named_by_current_user_with_no_scripted_query() {
+    // Detecting the dropped-term failure is second best; not sending a scripted
+    // term is first. `current_user` identifies the record, so `user me` reads it
+    // by sys_id and the sabotage-able query never leaves the process.
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        CURRENT_USER_PATH,
+        200,
+        current_user_body("abeyahmad"),
+        1,
+    )
+    .await;
+    Mock::given(method("GET"))
+        .and(path(format!(
+            "{SYS_USER_PATH}/218517762f7903107efd1d707fa4e3de"
+        )))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({"result": {
+            "user_name": "abeyahmad",
+            "sys_id": "218517762f7903107efd1d707fa4e3de",
+            "email": "abey@example.com",
+        }})))
+        .expect(1)
+        .mount(&server)
+        .await;
+    // The scripted list read must not happen at all.
+    mount_sys_user(&server, json!([{"user_name": "survey.user"}]), 0).await;
+    let uri = server.uri();
+
+    let (code, stdout, stderr) = tokio::task::spawn_blocking(move || run(&uri, &["user", "me"]))
+        .await
+        .unwrap();
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let v: Value = serde_json::from_str(&stdout).expect("user me emits JSON");
+    assert_eq!(v["user_name"], json!("abeyahmad"));
+    assert_eq!(v["email"], json!("abey@example.com"));
+    assert_eq!(
+        v["sys_id"],
+        json!("218517762f7903107efd1d707fa4e3de"),
+        "the record read must be the one current_user identified"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn user_me_falls_back_to_the_scripted_read_when_current_user_names_no_record() {
+    // `current_user` answered, but with a login name and no `user_sys_id` — there
+    // is nothing to read by id, so the scripted rung is still load-bearing.
+    let server = MockServer::start().await;
+    mount(
+        &server,
+        CURRENT_USER_PATH,
+        200,
+        json!({"result": {"user_name": "abeyahmad", "user_display_name": "Abey Ahmad"}}),
+        1,
+    )
+    .await;
+    mount_sys_user(
+        &server,
+        json!([{"user_name": "abeyahmad", "sys_id": "abc123"}]),
+        1,
+    )
+    .await;
+    let uri = server.uri();
+
+    let (code, stdout, stderr) = tokio::task::spawn_blocking(move || run(&uri, &["user", "me"]))
+        .await
+        .unwrap();
+
+    assert_eq!(code, 0, "stderr: {stderr}");
+    let v: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(v["user_name"], json!("abeyahmad"));
 }
 
 #[tokio::test(flavor = "current_thread")]
 async fn user_me_returns_the_single_matched_record() {
     let server = MockServer::start().await;
+    mount(&server, CURRENT_USER_PATH, 404, json!({}), 1).await;
     Mock::given(method("GET"))
         .and(path(SYS_USER_PATH))
         .and(query_param(

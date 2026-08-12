@@ -129,6 +129,27 @@ pub(crate) struct Identity {
 /// never acceptable is naming the *wrong* user: every path here either produces
 /// an identity it can defend or produces `None`.
 pub(crate) fn identify(client: &Client) -> Result<Option<Identity>> {
+    match identify_via_current_user(client)? {
+        Some(id) => Ok(Some(id)),
+        None => identify_via_sys_user(client),
+    }
+}
+
+/// Probe [`CURRENT_USER_PATH`] on its own, without the `sys_user` fallback.
+///
+/// `Ok(None)` means *this instance cannot answer here* — the endpoint is absent
+/// (404) or returned a 200 that names nobody — and the caller should fall back.
+/// It never means "no user". Errors that are verdicts rather than absences
+/// propagate: 401/403 is a real auth rejection and must stay exit 4; a 5xx is an
+/// instance fault and a second endpoint is no more likely to be honest about
+/// identity than the first; a 200 carrying HTML (a session redirect) surfaces as
+/// a transport-level parse error, and a fallback would be redirected the same
+/// way, so retrying only turns one clear failure into two.
+///
+/// Split out from [`identify`] because `sn user me` wants exactly this rung: the
+/// `user_sys_id` it returns lets that command read the caller's record directly,
+/// with no scripted query in the request at all.
+pub(crate) fn identify_via_current_user(client: &Client) -> Result<Option<Identity>> {
     match client.get(CURRENT_USER_PATH, &[]) {
         Ok(v) => match parse_current_user(&v) {
             Some(id) => Ok(Some(id)),
@@ -137,16 +158,10 @@ pub(crate) fn identify(client: &Client) -> Result<Option<Identity>> {
             // change). Not a reason to invent a name — hand off to the fallback.
             None => {
                 log_note("current_user did not name a user; falling back to sys_user");
-                identify_via_sys_user(client)
+                Ok(None)
             }
         },
-        // Only a *missing* endpoint earns the fallback. 401/403 is a real auth
-        // verdict and must stay exit 4; a 5xx is an instance fault and a second
-        // endpoint is no more likely to be honest about identity than the first.
-        // A 200 carrying HTML (a session redirect) surfaces as a transport-level
-        // parse error and also propagates: the fallback would be redirected the
-        // same way, so retrying it would only turn one clear failure into two.
-        Err(Error::Api { status: 404, .. }) => identify_via_sys_user(client),
+        Err(Error::Api { status: 404, .. }) => Ok(None),
         Err(e) => Err(e),
     }
 }
@@ -167,7 +182,12 @@ fn parse_current_user(v: &Value) -> Option<Identity> {
     })
 }
 
-fn non_empty(v: Option<&Value>) -> Option<String> {
+/// A trimmed string value, or `None` for absent / non-string / blank.
+///
+/// Every identity field goes through this. A whitespace-only name is not a name,
+/// and treating one as real is how a report of *who you are* becomes a
+/// fabrication rather than an absence.
+pub(crate) fn non_empty(v: Option<&Value>) -> Option<String> {
     match v.and_then(Value::as_str).map(str::trim) {
         Some(s) if !s.is_empty() => Some(s.to_string()),
         _ => None,

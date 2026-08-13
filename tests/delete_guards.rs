@@ -1,5 +1,5 @@
 //! Destructive commands share one confirmation guard
-//! (`cli::table::confirm_destructive`): with `--yes` the request proceeds;
+//! (`cli::kernel::confirm_destructive`): with `--yes` the request proceeds;
 //! without it, a non-interactive stdin is refused (exit 1 + JSON usage envelope
 //! on stderr) rather than acting silently. assert_cmd runs the binary with a
 //! non-TTY stdin, so the no-`--yes` path here is exactly the guard path.

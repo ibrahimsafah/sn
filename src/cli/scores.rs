@@ -1,9 +1,9 @@
-use crate::cli::{DisplayValueArg, GlobalFlags, ADVANCED};
+use crate::cli::{DisplayValueArg, DisplayValueOpt, GlobalFlags, ADVANCED};
 use crate::error::Result;
 use clap::{Subcommand, ValueEnum};
 use serde_json::{json, Value};
 
-use super::table::{build_client, build_profile, unwrap_or_raw, write_response};
+use super::kernel::{connect, emit, unwrap_or_raw, write_response};
 
 /// Score-series options, which only take effect alongside --include-scores.
 const SCORE_DATA: &str = "Score data options";
@@ -62,14 +62,8 @@ pub struct ScoresListArgs {
     /// Sort direction.
     #[arg(long, alias = "sysparm-sortdir", value_enum)]
     pub sort_dir: Option<SortDir>,
-    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        default_value = "true"
-    )]
-    pub display_value: Option<DisplayValueArg>,
+    #[command(flatten)]
+    pub display_value: DisplayValueOpt,
     /// Exclude reference link URLs from the response.
     #[arg(long, alias = "sysparm-exclude-reference-link", help_heading = ADVANCED)]
     pub exclude_reference_link: bool,
@@ -193,8 +187,7 @@ fn push_flag(q: &mut Vec<(String, String)>, key: &str, val: bool) {
 }
 
 pub fn list(global: &GlobalFlags, args: ScoresListArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
 
     let mut q: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.uuid {
@@ -230,7 +223,7 @@ pub fn list(global: &GlobalFlags, args: ScoresListArgs) -> Result<()> {
     if let Some(d) = args.sort_dir {
         q.push(("sysparm_sortdir".into(), d.as_str().to_string()));
     }
-    if let Some(dv) = args.display_value {
+    if let Some(dv) = args.display_value.display_value {
         let dv: crate::query::DisplayValue = dv.into();
         q.push(("sysparm_display_value".into(), dv.as_str().to_string()));
     }
@@ -285,23 +278,19 @@ pub fn list(global: &GlobalFlags, args: ScoresListArgs) -> Result<()> {
     );
 
     let resp = client.get(SCORECARDS_PATH, &q)?;
-    let out = unwrap_or_raw(resp, global.output);
-    write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn favorite(global: &GlobalFlags, args: ScoresFavoriteArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
 
     let q = vec![("sysparm_uuid".to_string(), args.uuid)];
     let resp = client.post(SCORECARDS_PATH, &q, &json!({}))?;
-    let out = unwrap_or_raw(resp, global.output);
-    write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn unfavorite(global: &GlobalFlags, args: ScoresFavoriteArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
 
     let uuid = args.uuid.clone();
     let q = vec![("sysparm_uuid".to_string(), args.uuid)];

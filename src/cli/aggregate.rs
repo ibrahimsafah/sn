@@ -1,7 +1,7 @@
-use crate::cli::{DisplayValueArg, GlobalFlags};
+use crate::cli::{DisplayValueOpt, GlobalFlags};
 use crate::error::Result;
 
-use super::table::{bool_opt, build_client, build_profile, unwrap_or_raw, write_response};
+use super::kernel::{bool_opt, connect, emit};
 
 #[derive(clap::Args, Debug)]
 pub struct AggregateArgs {
@@ -34,22 +34,15 @@ pub struct AggregateArgs {
     /// Aggregate filter (HAVING clause).
     #[arg(long, alias = "sysparm-having")]
     pub having: Option<String>,
-    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        default_value = "true"
-    )]
-    pub display_value: Option<DisplayValueArg>,
+    #[command(flatten)]
+    pub display_value: DisplayValueOpt,
     /// Query category for index selection.
     #[arg(long, alias = "sysparm-query-category")]
     pub query_category: Option<String>,
 }
 
 pub fn run(global: &GlobalFlags, args: AggregateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
 
     let mut q: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.query {
@@ -79,7 +72,7 @@ pub fn run(global: &GlobalFlags, args: AggregateArgs) -> Result<()> {
     if let Some(v) = args.having {
         q.push(("sysparm_having".into(), v));
     }
-    if let Some(dv) = args.display_value {
+    if let Some(dv) = args.display_value.display_value {
         let dv: crate::query::DisplayValue = dv.into();
         q.push(("sysparm_display_value".into(), dv.as_str().to_string()));
     }
@@ -89,6 +82,5 @@ pub fn run(global: &GlobalFlags, args: AggregateArgs) -> Result<()> {
 
     let path = format!("/api/now/stats/{}", args.table);
     let resp = client.get(&path, &q)?;
-    let out = unwrap_or_raw(resp, global.output);
-    write_response(global, &out)
+    emit(global, resp)
 }

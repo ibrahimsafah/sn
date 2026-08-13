@@ -1,6 +1,6 @@
-use crate::body::{build_body, BodyInput};
-use crate::cli::table::{build_client, build_profile, unwrap_or_raw};
-use crate::cli::GlobalFlags;
+use crate::body::EmptyBody;
+use crate::cli::kernel::{connect, emit};
+use crate::cli::{BodyArgs, GlobalFlags};
 use crate::error::{Error, Result};
 use clap::Subcommand;
 use serde_json::Value;
@@ -19,12 +19,8 @@ pub enum ImportSub {
 pub struct ImportCreateArgs {
     /// Staging table name.
     pub staging_table: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 #[derive(clap::Args, Debug)]
@@ -45,25 +41,15 @@ pub struct ImportGetArgs {
 }
 
 pub fn create(global: &GlobalFlags, args: ImportCreateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/import/{}", args.staging_table);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn bulk(global: &GlobalFlags, args: ImportBulkArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/import/{}/insertMultiple", args.staging_table);
     // insertMultiple expects {"records": [...]}; accept the documented bare
     // array and wrap it, or pass a pre-wrapped object through as-is.
@@ -77,15 +63,12 @@ pub fn bulk(global: &GlobalFlags, args: ImportBulkArgs) -> Result<()> {
         }
     };
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn get(global: &GlobalFlags, args: ImportGetArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/import/{}/{}", args.staging_table, args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }

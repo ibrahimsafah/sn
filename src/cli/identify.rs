@@ -1,6 +1,6 @@
-use crate::body::{build_body, BodyInput};
-use crate::cli::table::{build_client, build_profile, unwrap_or_raw};
-use crate::cli::GlobalFlags;
+use crate::body::EmptyBody;
+use crate::cli::kernel::{connect, emit};
+use crate::cli::{BodyArgs, GlobalFlags};
 use crate::error::Result;
 use clap::Subcommand;
 
@@ -18,12 +18,8 @@ pub enum IdentifySub {
 
 #[derive(clap::Args, Debug)]
 pub struct IdentifyArgs {
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
     /// Data source identifier.
     #[arg(long)]
     pub data_source: Option<String>,
@@ -31,12 +27,8 @@ pub struct IdentifyArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct IdentifyEnhancedArgs {
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
     /// Data source identifier.
     #[arg(long)]
     pub data_source: Option<String>,
@@ -46,56 +38,30 @@ pub struct IdentifyEnhancedArgs {
 }
 
 pub fn create_update(global: &GlobalFlags, args: IdentifyArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let client = connect(global)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.data_source {
         query.push(("sysparm_data_source".into(), v));
     }
     let resp = client.post("/api/now/identifyreconcile", &query, &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn query(global: &GlobalFlags, args: IdentifyArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let client = connect(global)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let mut query_params: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.data_source {
         query_params.push(("sysparm_data_source".into(), v));
     }
     let resp = client.post("/api/now/identifyreconcile/query", &query_params, &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn create_update_enhanced(global: &GlobalFlags, args: IdentifyEnhancedArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let client = connect(global)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.data_source {
         query.push(("sysparm_data_source".into(), v));
@@ -104,21 +70,12 @@ pub fn create_update_enhanced(global: &GlobalFlags, args: IdentifyEnhancedArgs) 
         query.push(("options".into(), v));
     }
     let resp = client.post("/api/now/identifyreconcile/enhanced", &query, &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn query_enhanced(global: &GlobalFlags, args: IdentifyEnhancedArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let client = connect(global)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.data_source {
         query.push(("sysparm_data_source".into(), v));
@@ -127,6 +84,5 @@ pub fn query_enhanced(global: &GlobalFlags, args: IdentifyEnhancedArgs) -> Resul
         query.push(("options".into(), v));
     }
     let resp = client.post("/api/now/identifyreconcile/queryEnhanced", &query, &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }

@@ -1,6 +1,6 @@
-use crate::body::{build_body, BodyInput};
-use crate::cli::table::{build_client, build_profile, confirm_delete, unwrap_or_raw};
-use crate::cli::GlobalFlags;
+use crate::body::{self, EmptyBody};
+use crate::cli::kernel::{confirm_delete, connect, emit};
+use crate::cli::{BodyArgs, GlobalFlags, Paging};
 use crate::error::{Error, Result};
 use clap::Subcommand;
 use serde_json::{Map, Value};
@@ -36,18 +36,8 @@ pub struct CmdbListArgs {
     /// Encoded query, e.g. `active=true^priority=1`.
     #[arg(long, short = 'q', alias = "sysparm-query")]
     pub query: Option<String>,
-    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
-    #[arg(
-        long,
-        alias = "sysparm-limit",
-        alias = "limit",
-        alias = "setLimit",
-        default_value_t = 1000
-    )]
-    pub setlimit: u32,
-    /// Starting offset for manual pagination.
-    #[arg(long, alias = "sysparm-offset")]
-    pub offset: Option<u32>,
+    #[command(flatten)]
+    pub paging: Paging<1000>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -110,12 +100,8 @@ pub struct CmdbRelationAddArgs {
     pub class: String,
     /// sys_id of the CI.
     pub sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 #[derive(clap::Args, Debug)]
@@ -132,29 +118,25 @@ pub struct CmdbRelationDeleteArgs {
 }
 
 pub fn list(global: &GlobalFlags, args: CmdbListArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/cmdb/instance/{}", args.class);
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.query {
         query.push(("sysparm_query".into(), v));
     }
-    query.push(("sysparm_limit".into(), args.setlimit.to_string()));
-    if let Some(v) = args.offset {
+    query.push(("sysparm_limit".into(), args.paging.setlimit().to_string()));
+    if let Some(v) = args.paging.offset {
         query.push(("sysparm_offset".into(), v.to_string()));
     }
     let resp = client.get(&path, &query)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn get(global: &GlobalFlags, args: CmdbGetArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/cmdb/instance/{}/{}", args.class, args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 /// Wrap a flat field map in the IRE envelope the CMDB Instance API demands:
@@ -270,46 +252,32 @@ fn stringify_attributes(attrs: &mut Value) -> Result<()> {
 }
 
 pub fn create(global: &GlobalFlags, args: CmdbCreateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/cmdb/instance/{}", args.class);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = ire_envelope(build_body(body_input)?, args.source)?;
+    let body = ire_envelope(
+        body::from_flags(args.data, args.field, EmptyBody::Reject)?,
+        args.source,
+    )?;
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn update(global: &GlobalFlags, args: CmdbUpdateArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/cmdb/instance/{}/{}", args.class, args.sys_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = ire_envelope(build_body(body_input)?, args.source)?;
+    let body = ire_envelope(
+        body::from_flags(args.data, args.field, EmptyBody::Reject)?,
+        args.source,
+    )?;
     let resp = client.patch(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn meta(global: &GlobalFlags, args: CmdbMetaArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/cmdb/meta/{}", args.class);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn relation(global: &GlobalFlags, sub: CmdbRelationSub) -> Result<()> {
@@ -320,23 +288,14 @@ pub fn relation(global: &GlobalFlags, sub: CmdbRelationSub) -> Result<()> {
 }
 
 fn relation_add(global: &GlobalFlags, args: CmdbRelationAddArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!(
         "/api/now/cmdb/instance/{}/{}/relation",
         args.class, args.sys_id
     );
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let resp = client.post(&path, &[], &body)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 fn relation_delete(global: &GlobalFlags, args: CmdbRelationDeleteArgs) -> Result<()> {
@@ -347,8 +306,7 @@ fn relation_delete(global: &GlobalFlags, args: CmdbRelationDeleteArgs) -> Result
             args.rel_sys_id, args.class, args.sys_id
         ),
     )?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!(
         "/api/now/cmdb/instance/{}/{}/relation/{}",
         args.class, args.sys_id, args.rel_sys_id

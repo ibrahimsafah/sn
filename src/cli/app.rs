@@ -1,5 +1,5 @@
-use crate::cli::table::{build_client, build_profile, confirm_destructive, unwrap_or_raw};
-use crate::cli::GlobalFlags;
+use crate::cli::kernel::{confirm_destructive, connect, unwrap_or_raw};
+use crate::cli::{GlobalFlags, WaitArgs};
 use crate::error::{Error, Result};
 use clap::Subcommand;
 
@@ -14,6 +14,7 @@ pub enum AppSub {
 }
 
 #[derive(clap::Args, Debug)]
+#[command(group = clap::ArgGroup::new("target").required(true).multiple(true).args(["sys_id", "scope"]))]
 pub struct AppInstallArgs {
     /// sys_id of the application.
     #[arg(long)]
@@ -30,15 +31,12 @@ pub struct AppInstallArgs {
     /// Version of the base application to use.
     #[arg(long)]
     pub base_app_version: Option<String>,
-    /// Block until the operation completes (polls progress API).
-    #[arg(long)]
-    pub wait: bool,
-    /// Give up on --wait after this many seconds (exit 3). Default: no limit.
-    #[arg(long, value_name = "SECS", requires = "wait")]
-    pub wait_timeout: Option<u64>,
+    #[command(flatten)]
+    pub wait: WaitArgs,
 }
 
 #[derive(clap::Args, Debug)]
+#[command(group = clap::ArgGroup::new("target").required(true).multiple(true).args(["sys_id", "scope"]))]
 pub struct AppPublishArgs {
     /// sys_id of the application.
     #[arg(long)]
@@ -52,12 +50,8 @@ pub struct AppPublishArgs {
     /// Developer notes for this publish.
     #[arg(long)]
     pub dev_notes: Option<String>,
-    /// Block until the operation completes (polls progress API).
-    #[arg(long)]
-    pub wait: bool,
-    /// Give up on --wait after this many seconds (exit 3). Default: no limit.
-    #[arg(long, value_name = "SECS", requires = "wait")]
-    pub wait_timeout: Option<u64>,
+    #[command(flatten)]
+    pub wait: WaitArgs,
 }
 
 #[derive(clap::Args, Debug)]
@@ -74,22 +68,12 @@ pub struct AppRollbackArgs {
     /// Skip confirmation prompt (required for non-interactive use).
     #[arg(long, short = 'y')]
     pub yes: bool,
-    /// Block until the operation completes (polls progress API).
-    #[arg(long)]
-    pub wait: bool,
-    /// Give up on --wait after this many seconds (exit 3). Default: no limit.
-    #[arg(long, value_name = "SECS", requires = "wait")]
-    pub wait_timeout: Option<u64>,
+    #[command(flatten)]
+    pub wait: WaitArgs,
 }
 
 pub fn install(global: &GlobalFlags, args: AppInstallArgs) -> Result<()> {
-    if args.sys_id.is_none() && args.scope.is_none() {
-        return Err(Error::Usage(
-            "either --sys-id or --scope is required".into(),
-        ));
-    }
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.sys_id {
         query.push(("sys_id".into(), v));
@@ -112,17 +96,11 @@ pub fn install(global: &GlobalFlags, args: AppInstallArgs) -> Result<()> {
         &serde_json::json!({}),
     )?;
     let out = unwrap_or_raw(resp, global.output);
-    crate::cli::progress::finish_cicd(global, &client, out, args.wait, args.wait_timeout)
+    crate::cli::progress::finish_cicd(global, &client, out, args.wait)
 }
 
 pub fn publish(global: &GlobalFlags, args: AppPublishArgs) -> Result<()> {
-    if args.sys_id.is_none() && args.scope.is_none() {
-        return Err(Error::Usage(
-            "either --sys-id or --scope is required".into(),
-        ));
-    }
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.sys_id {
         query.push(("sys_id".into(), v));
@@ -142,7 +120,7 @@ pub fn publish(global: &GlobalFlags, args: AppPublishArgs) -> Result<()> {
         &serde_json::json!({}),
     )?;
     let out = unwrap_or_raw(resp, global.output);
-    crate::cli::progress::finish_cicd(global, &client, out, args.wait, args.wait_timeout)
+    crate::cli::progress::finish_cicd(global, &client, out, args.wait)
 }
 
 pub fn rollback(global: &GlobalFlags, args: AppRollbackArgs) -> Result<()> {
@@ -162,8 +140,7 @@ pub fn rollback(global: &GlobalFlags, args: AppRollbackArgs) -> Result<()> {
         "roll back",
         &format!("{target} to version {}", args.version),
     )?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.sys_id {
         query.push(("sys_id".into(), v));
@@ -178,5 +155,5 @@ pub fn rollback(global: &GlobalFlags, args: AppRollbackArgs) -> Result<()> {
         &serde_json::json!({}),
     )?;
     let out = unwrap_or_raw(resp, global.output);
-    crate::cli::progress::finish_cicd(global, &client, out, args.wait, args.wait_timeout)
+    crate::cli::progress::finish_cicd(global, &client, out, args.wait)
 }

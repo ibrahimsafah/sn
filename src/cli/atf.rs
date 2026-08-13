@@ -1,6 +1,6 @@
-use crate::cli::table::{build_client, build_profile, unwrap_or_raw};
-use crate::cli::GlobalFlags;
-use crate::error::{Error, Result};
+use crate::cli::kernel::{connect, emit, unwrap_or_raw};
+use crate::cli::{GlobalFlags, WaitArgs};
+use crate::error::Result;
 use clap::Subcommand;
 
 #[derive(Subcommand, Debug)]
@@ -12,6 +12,7 @@ pub enum AtfSub {
 }
 
 #[derive(clap::Args, Debug)]
+#[command(group = clap::ArgGroup::new("suite").required(true).multiple(true).args(["suite_id", "suite_name"]))]
 pub struct AtfRunArgs {
     /// sys_id of the test suite.
     #[arg(long)]
@@ -37,12 +38,8 @@ pub struct AtfRunArgs {
     /// Record performance metrics during the run.
     #[arg(long)]
     pub performance_run: bool,
-    /// Block until the operation completes (polls progress API).
-    #[arg(long)]
-    pub wait: bool,
-    /// Give up on --wait after this many seconds (exit 3). Default: no limit.
-    #[arg(long, value_name = "SECS", requires = "wait")]
-    pub wait_timeout: Option<u64>,
+    #[command(flatten)]
+    pub wait: WaitArgs,
 }
 
 #[derive(clap::Args, Debug)]
@@ -52,13 +49,7 @@ pub struct AtfResultsArgs {
 }
 
 pub fn run(global: &GlobalFlags, args: AtfRunArgs) -> Result<()> {
-    if args.suite_id.is_none() && args.suite_name.is_none() {
-        return Err(Error::Usage(
-            "either --suite-id or --suite-name is required".into(),
-        ));
-    }
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.suite_id {
         query.push(("test_suite_sys_id".into(), v));
@@ -86,14 +77,12 @@ pub fn run(global: &GlobalFlags, args: AtfRunArgs) -> Result<()> {
     }
     let resp = client.post("/api/sn_cicd/testsuite/run", &query, &serde_json::json!({}))?;
     let out = unwrap_or_raw(resp, global.output);
-    crate::cli::progress::finish_cicd(global, &client, out, args.wait, args.wait_timeout)
+    crate::cli::progress::finish_cicd(global, &client, out, args.wait)
 }
 
 pub fn results(global: &GlobalFlags, args: AtfResultsArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/sn_cicd/testsuite/results/{}", args.result_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }

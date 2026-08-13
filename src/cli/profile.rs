@@ -1,5 +1,5 @@
 use crate::cli::auth::{complete_oauth_login, whoami};
-use crate::cli::table::{build_client, build_profile, confirm_destructive, write_response};
+use crate::cli::kernel::{build_client, build_profile, confirm_destructive, write_response};
 use crate::cli::GlobalFlags;
 use crate::config::{
     self, config_path, credentials_path, default_redirect_uri, load_config_from,
@@ -106,13 +106,6 @@ fn auth_str(method: AuthMethod) -> &'static str {
     match method {
         AuthMethod::Basic => "basic",
         AuthMethod::Oauth => "oauth",
-    }
-}
-
-fn grant_str(g: OAuthGrant) -> &'static str {
-    match g {
-        OAuthGrant::AuthorizationCode => "authorization_code",
-        OAuthGrant::ClientCredentials => "client_credentials",
     }
 }
 
@@ -741,7 +734,7 @@ fn add(global: &GlobalFlags, args: ProfileAddArgs) -> Result<()> {
         "verified": !args.no_verify,
     });
     if matches!(input.auth, AuthMethod::Oauth) {
-        out["grant"] = json!(grant_str(input.grant));
+        out["grant"] = json!(input.grant.as_str());
         out["loggedIn"] = json!(!args.no_verify);
         if args.no_verify {
             out["next"] = json!(format!("sn auth login --profile {}", input.name));
@@ -807,7 +800,7 @@ fn show(global: &GlobalFlags, name: Option<String>) -> Result<()> {
         AuthMethod::Oauth => {
             if let Some(o) = &p.oauth {
                 out["client_id"] = json!(o.client_id);
-                out["grant"] = json!(grant_str(o.grant));
+                out["grant"] = json!(o.grant.as_str());
                 out["redirect_uri"] =
                     json!(o.redirect_uri.clone().unwrap_or_else(default_redirect_uri));
                 out["pkce"] = json!(o.pkce);

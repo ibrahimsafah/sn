@@ -1,4 +1,4 @@
-use crate::cli::table::{build_client, build_profile, write_response};
+use crate::cli::kernel::{build_client, build_profile, write_response};
 use crate::cli::GlobalFlags;
 use crate::client::Client;
 use crate::config::{
@@ -21,13 +21,6 @@ pub enum AuthSub {
     Status,
     /// Force an OAuth token refresh now.
     Refresh,
-}
-
-fn grant_str(g: OAuthGrant) -> &'static str {
-    match g {
-        OAuthGrant::AuthorizationCode => "authorization_code",
-        OAuthGrant::ClientCredentials => "client_credentials",
-    }
 }
 
 /// Pure session command: run the OAuth flow for an already-configured OAuth
@@ -53,7 +46,7 @@ pub fn login(global: &GlobalFlags) -> Result<()> {
         "profile": name,
         "instance": profile.instance,
         "auth": "oauth",
-        "grant": grant_str(grant),
+        "grant": grant.as_str(),
         "user": user,
     });
     write_response(global, &out)
@@ -265,7 +258,7 @@ pub fn status(global: &GlobalFlags) -> Result<()> {
         }
         AuthMethod::Oauth => {
             if let Some(o) = &profile.oauth {
-                out["grant"] = json!(grant_str(o.grant));
+                out["grant"] = json!(o.grant.as_str());
                 out["clientId"] = json!(o.client_id);
                 out["redirectUri"] = json!(o.redirect_uri);
                 out["loggedIn"] = json!(o.tokens.is_some());

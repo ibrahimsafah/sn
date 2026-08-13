@@ -1,4 +1,4 @@
-use crate::cli::table::{build_profile, write_response};
+use crate::cli::kernel::{build_profile, write_response};
 use crate::cli::GlobalFlags;
 use crate::client::normalize_base_url;
 use crate::error::{Error, Result};

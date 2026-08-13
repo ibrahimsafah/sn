@@ -1,5 +1,5 @@
 use crate::cli::auth::identify_via_current_user;
-use crate::cli::table::{build_client, build_profile, take_field};
+use crate::cli::kernel::{connect, take_field, write_response};
 use crate::cli::{GlobalFlags, OutputMode};
 use crate::client::Client;
 use crate::error::{Error, Result};
@@ -13,8 +13,7 @@ pub enum UserSub {
 }
 
 pub fn me(global: &GlobalFlags) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
 
     // Preferred path: let the instance name the record, then read that record by
     // sys_id. No scripted term travels with the request, so the failure this
@@ -48,7 +47,7 @@ pub fn me(global: &GlobalFlags) -> Result<()> {
             detail: None,
         })?
     };
-    crate::cli::table::write_response(global, &out)
+    write_response(global, &out)
 }
 
 /// Fallback: `sys_user` filtered by a server-side `gs.getUserName()` term, for an

@@ -74,6 +74,15 @@ impl OAuthGrant {
     fn is_default(&self) -> bool {
         matches!(self, OAuthGrant::AuthorizationCode)
     }
+
+    /// The wire/TOML spelling, matching the serde and clap `snake_case`
+    /// renames above — what `sn auth`/`sn profile` report as `grant`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OAuthGrant::AuthorizationCode => "authorization_code",
+            OAuthGrant::ClientCredentials => "client_credentials",
+        }
+    }
 }
 
 fn default_true() -> bool {
@@ -367,7 +376,7 @@ instance = "dev.example.com"
 /// reads the config, and making each one contend with writers would trade a
 /// rare lost update for a common stall. Instead, *write ordering* is what keeps
 /// an unlocked reader honest. Readers load `config.toml` first and
-/// `credentials.toml` second (`cli::table::build_profile`), and the one state
+/// `credentials.toml` second (`cli::kernel::build_profile`), and the one state
 /// that hurts them is a config entry whose credentials have not landed —
 /// `resolve_profile` then hands back `Auth::Basic("", "")` and the caller gets a
 /// baffling 401. So writers go the opposite way round:

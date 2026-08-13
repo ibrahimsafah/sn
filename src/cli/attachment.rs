@@ -1,5 +1,5 @@
-use crate::cli::table::{build_client, build_profile, confirm_delete, unwrap_or_raw};
-use crate::cli::GlobalFlags;
+use crate::cli::kernel::{confirm_delete, connect, emit, write_response};
+use crate::cli::{GlobalFlags, Paging};
 use crate::client::{Download, DownloadError};
 use crate::error::{Error, Result};
 use clap::Subcommand;
@@ -27,18 +27,8 @@ pub struct AttachmentListArgs {
     /// Encoded query, e.g. `active=true^priority=1`.
     #[arg(long, short = 'q', alias = "sysparm-query")]
     pub query: Option<String>,
-    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
-    #[arg(
-        long,
-        alias = "sysparm-limit",
-        alias = "limit",
-        alias = "setLimit",
-        default_value_t = 100
-    )]
-    pub setlimit: u32,
-    /// Starting offset for manual pagination.
-    #[arg(long, alias = "sysparm-offset")]
-    pub offset: Option<u32>,
+    #[command(flatten)]
+    pub paging: Paging<100>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -94,33 +84,28 @@ pub struct AttachmentDeleteArgs {
 }
 
 pub fn list(global: &GlobalFlags, args: AttachmentListArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.query {
         query.push(("sysparm_query".into(), v));
     }
-    query.push(("sysparm_limit".into(), args.setlimit.to_string()));
-    if let Some(v) = args.offset {
+    query.push(("sysparm_limit".into(), args.paging.setlimit().to_string()));
+    if let Some(v) = args.paging.offset {
         query.push(("sysparm_offset".into(), v.to_string()));
     }
     let resp = client.get("/api/now/attachment", &query)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn get(global: &GlobalFlags, args: AttachmentGetArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/attachment/{}", args.sys_id);
     let resp = client.get(&path, &[])?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn upload(global: &GlobalFlags, args: AttachmentUploadArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let file_path = Path::new(&args.file);
     let file_name = args.file_name.unwrap_or_else(|| {
         file_path
@@ -143,13 +128,11 @@ pub fn upload(global: &GlobalFlags, args: AttachmentUploadArgs) -> Result<()> {
         query.push(("encryption_context".into(), v));
     }
     let resp = client.upload_file("/api/now/attachment/file", &query, body, &content_type)?;
-    let out = unwrap_or_raw(resp, global.output);
-    crate::cli::table::write_response(global, &out)
+    emit(global, resp)
 }
 
 pub fn download(global: &GlobalFlags, args: AttachmentDownloadArgs) -> Result<()> {
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/attachment/{}/file", args.sys_id);
     let mut download = client.download_file(&path)?;
     match args.out {
@@ -206,7 +189,7 @@ fn stream_to_file(global: &GlobalFlags, download: &mut Download, out_path: &str)
         "path": out_path,
         "size": written,
     });
-    crate::cli::table::write_response(global, &meta)
+    write_response(global, &meta)
 }
 
 /// Stream the body to stdout.
@@ -327,8 +310,7 @@ fn reap_staging_on_sigint(temp_path: &Path) {
 
 pub fn delete(global: &GlobalFlags, args: AttachmentDeleteArgs) -> Result<()> {
     confirm_delete(args.yes, &format!("attachment {}", args.sys_id))?;
-    let profile = build_profile(global)?;
-    let client = build_client(&profile, global.timeout)?;
+    let client = connect(global)?;
     let path = format!("/api/now/attachment/{}", args.sys_id);
     client.delete(&path, &[])?;
     Ok(())

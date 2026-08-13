@@ -293,6 +293,16 @@ This repo is also a Claude Code plugin and its own marketplace (`.claude-plugin/
 - `mask-check.yml` — **run before tagging** (`gh workflow run mask-check.yml`). Preflight that pushes the top CHANGELOG section through a job output, the exact path that breaks, and names the offending line if it would be withheld.
 - Config: `dist-workspace.toml` (cargo-dist), `wix/main.wxs` (MSI template; stable GUIDs in `[package.metadata.wix]` of `Cargo.toml`), `.github/dependabot.yml` (weekly grouped dep PRs for cargo + github-actions).
 
+### Release notes: state the fix, keep it short
+
+**The top section of `CHANGELOG.md` *is* the GitHub release body.** cargo-dist parses the file and publishes that section as `announcement_github_body` — nothing in `dist-workspace.toml` names the file or reshapes the text. So it is written for someone deciding whether to upgrade, not for a reviewer reconstructing the work.
+
+- **State the fix, not the problem.** "`sn cmdb create` and `sn cmdb update` work" — not "they sent a flat body, which that API cannot accept under any input: PATCH came back as a raw Java NPE…". A user upgrading does not need the defect's history, and leading with it buries the one sentence they came for.
+- **One line per entry**, and keep the whole section **under ~4,000 characters**. 0.12.0 shipped at 37,114 and rendered as an unbroken wall; the rewrite says the same things in 3,383.
+- **New commands lead**, and they are the one place to spend words: name the verb and describe what it now lets a caller do. Everything else follows — `### Breaking`, then `### Fixed`, then `### Security`. A release is read first for what it adds.
+- **Design rationale, live measurements and rejected alternatives do not belong here.** They belong in this file and `docs/`, which is where they already are — the changelog was duplicating them. Keep a number only when the number is the user-facing result ("800 MB at 19 MB peak RSS"), not when it is evidence for a design choice.
+- **Never use `## ` inside a release section.** `mask-check.yml` extracts the top section with `awk '/^## /{n++} n==1'`, so a nested `##` truncates what the preflight checks. Subsections are `### `.
+
 ### The changelog can silently empty a release
 
 **Never write `Bearer <word>` in `CHANGELOG.md`.** It will publish a release with zero assets while reporting success.

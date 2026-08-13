@@ -39,12 +39,16 @@
 //! best-effort feed, not a log; anything that must be complete has to be
 //! reconciled against the table itself over the outage window.
 //!
-//! Drops are not rare, either: the instance reaps a watcher's HTTP session
-//! ~60–120s after it was minted (measured live; neither AMB traffic nor HTTP
-//! touches prevent it), which [`crate::amb::Amb::poll`] surfaces as a session
-//! drop the moment a connect reply reports it. Each reap costs one reconnect —
-//! on fresh cookies — and one marker; the alternative was a watcher that kept
-//! polling the dead session and silently delivered nothing forever.
+//! The routine threat — the instance reaping a watcher's HTTP session ~60–120s
+//! after it was minted (measured live; neither AMB traffic nor HTTP touches
+//! prevent it) — does not produce drops at all: [`pump_rotating`] replaces the
+//! session on a schedule (`--session-rotate`, default 45s, under the measured
+//! floor) with an overlapped handoff that opens no gap and writes no marker.
+//! A marker therefore reports a *genuine* failure: a network drop, or a
+//! rotation that lost its race to the reaper. That fallback is
+//! [`crate::amb::Amb::poll`] surfacing the session's death the moment a connect
+//! reply reports it — the alternative was a watcher that kept polling the dead
+//! session and silently delivered nothing forever.
 //!
 //! What the watcher can do honestly is say *where* the hole is. On a successful
 //! resubscribe after a drop it writes one synthetic line:
@@ -123,10 +127,19 @@ const DRAIN_WAIT: Duration = Duration::from_millis(100);
 /// this is also flowing on the already-subscribed replacement.
 const DRAIN_POLLS: usize = 50;
 
-/// How long an emitted event's key is remembered for seam deduplication. The
-/// rotation overlap it exists for is a few seconds wide; a minute of memory
-/// covers it with a wide margin without growing unbounded.
-const DEDUP_TTL: Duration = Duration::from_secs(60);
+/// How many *consecutive* empty drain polls mean the old session is dry. One is
+/// not enough: an empty poll is ambiguous between a read timeout and a
+/// meta-only batch (the old session's expired long-poll being answered and
+/// re-armed), and quitting on the ambiguous one abandons frames the re-armed
+/// connect was about to deliver.
+const DRAIN_QUIET_POLLS: usize = 3;
+
+/// How long after a rotation begins the seam dedup stays armed. The overlap it
+/// guards — writes the old session delivers in the drain and the new session
+/// delivers again from its own buffer — is a few seconds wide; outside a seam
+/// the dedup is inert, so it can never eat a legitimate event on the normal
+/// path.
+const SEAM_TTL: Duration = Duration::from_secs(30);
 
 /// Bounds on the stream. Without at least one of these the command runs
 /// forever, which is right for a terminal and useless inside a script — so they
@@ -579,11 +592,16 @@ struct Stream<W: Write> {
     /// running. A new session does not reset it, so silence accumulates across
     /// reconnects.
     last_event: Instant,
-    /// Keys of recently emitted events, oldest first. Session rotation overlaps
-    /// the old and new subscription, so one write can arrive on both; the second
-    /// copy is dropped here. Keyed on `sys_id|operation|sys_mod_count`, so a
-    /// genuine re-write — which increments `sys_mod_count` — never matches.
-    recent: std::collections::VecDeque<(String, Instant)>,
+    /// Keys of events emitted inside the current rotation seam. Session
+    /// rotation overlaps the old and new subscription, so one write can arrive
+    /// on both; the second copy is dropped here. Keyed on
+    /// `sys_id|operation|sys_mod_count`, so a genuine re-write — which
+    /// increments `sys_mod_count` — never matches.
+    recent: Vec<String>,
+    /// When the current seam stops being suspect. `None` (the steady state)
+    /// makes [`duplicate`](Stream::duplicate) inert, so the dedup cannot eat a
+    /// legitimate event anywhere but the few seconds around a rotation.
+    seam_until: Option<Instant>,
 }
 
 impl<W: Write> Stream<W> {
@@ -593,30 +611,41 @@ impl<W: Write> Stream<W> {
             max_events,
             emitted: 0,
             last_event: Instant::now(),
-            recent: std::collections::VecDeque::new(),
+            recent: Vec::new(),
+            seam_until: None,
         }
     }
 
-    /// Whether this raw event was already emitted (the rotation seam), recording
-    /// it if not. An event with no `sys_id` cannot be keyed and is never treated
-    /// as a duplicate — dropping an unidentifiable event is worse than repeating
-    /// one.
+    /// Arm the seam dedup for the rotation that is about to drain. Clears the
+    /// previous seam's keys: nothing older than the last handoff can still be
+    /// in flight on either session.
+    fn open_seam(&mut self) {
+        self.recent.clear();
+        self.seam_until = Some(Instant::now() + SEAM_TTL);
+    }
+
+    /// Whether this raw event was already emitted inside the current rotation
+    /// seam, recording it if not. Inert outside a seam. An event with no
+    /// `sys_id` (or no usable write identity — see [`dedup_key`]) is never
+    /// treated as a duplicate: dropping an unidentifiable event is worse than
+    /// repeating one.
     fn duplicate(&mut self, data: &Value) -> bool {
+        match self.seam_until {
+            Some(until) if Instant::now() <= until => {}
+            Some(_) => {
+                self.recent.clear();
+                self.seam_until = None;
+                return false;
+            }
+            None => return false,
+        }
         let Some(key) = dedup_key(data) else {
             return false;
         };
-        let now = Instant::now();
-        while self
-            .recent
-            .front()
-            .is_some_and(|(_, t)| now.duration_since(*t) > DEDUP_TTL)
-        {
-            self.recent.pop_front();
-        }
-        if self.recent.iter().any(|(k, _)| *k == key) {
+        if self.recent.contains(&key) {
             return true;
         }
-        self.recent.push_back((key, now));
+        self.recent.push(key);
         false
     }
 
@@ -670,21 +699,28 @@ impl<W: Write> Stream<W> {
     }
 }
 
-/// The identity of one write, as its event reports it. `sys_mod_count` is one
-/// of the five audit columns every record event carries, and it increments per
-/// write — so two events with the same key are the same write seen twice, not
-/// two writes. A delete carries no record, so its key is `sys_id|delete|`; a
-/// record cannot be deleted twice.
+/// The identity of one write, as its event reports it — or `None` when the
+/// event carries no identity sharp enough to dedup on.
+///
+/// `sys_mod_count` increments per write, so two events with the same key are
+/// the same write seen twice, not two writes. A table without that column
+/// (`syslog` is one, measured) sends events that cannot tell one write from the
+/// next — those are never keyed, because deduping them would swallow a genuine
+/// second write. A delete carries no record at all, so `sys_id` alone
+/// identifies it; a delete→re-insert→delete of one `sys_id` inside a single
+/// seam window is accepted as out of scope.
 fn dedup_key(data: &Value) -> Option<String> {
     let sys_id = data.get("sys_id").and_then(Value::as_str)?;
     let operation = data.get("operation").and_then(Value::as_str).unwrap_or("");
+    if operation == "delete" {
+        return Some(format!("{sys_id}|delete|"));
+    }
     let mod_count = data
         .pointer("/record/sys_mod_count/value")
         .map(|v| match v {
             Value::String(s) => s.clone(),
             other => other.to_string(),
-        })
-        .unwrap_or_default();
+        })?;
     Some(format!("{sys_id}|{operation}|{mod_count}"))
 }
 
@@ -765,24 +801,44 @@ fn pump_rotating<W: Write, L: Link, C: FnMut() -> Result<L>>(
     loop {
         match pump(link, ctx, stream, rotate_at)? {
             PumpEnd::Stopped => return Ok(()),
-            PumpEnd::Rotate => match replacement(ctx, connect) {
-                Ok(fresh) => {
-                    let done = drain(link, ctx, stream)?;
-                    link.disconnect();
-                    *link = fresh;
-                    rotate_at = ctx.plan.rotate.map(|d| Instant::now() + d);
-                    log_note("amb: rotated to a fresh session");
-                    if done {
-                        return Ok(());
+            PumpEnd::Rotate => {
+                // The replacement's reap countdown starts at its cookie mint,
+                // not when the drain finishes — anchor its rotation deadline
+                // there, or the handoff time is silently spent out of the
+                // margin between the rotation interval and the reap floor.
+                let minted = Instant::now();
+                match replacement(ctx, connect) {
+                    Ok(mut fresh) => {
+                        stream.open_seam();
+                        let done = match drain(link, ctx, stream) {
+                            Ok(done) => done,
+                            // The drain failed on this process's stdout, not on
+                            // a socket. Both sessions are subscribed and both
+                            // must say goodbye: the old one via session()'s
+                            // teardown once this propagates, the new one here —
+                            // dropping it would strand a live subscription with
+                            // no /meta/disconnect.
+                            Err(e) => {
+                                fresh.disconnect();
+                                return Err(e);
+                            }
+                        };
+                        link.disconnect();
+                        *link = fresh;
+                        rotate_at = ctx.plan.rotate.map(|d| minted + d);
+                        log_note("amb: rotated to a fresh session");
+                        if done {
+                            return Ok(());
+                        }
+                    }
+                    Err(e) => {
+                        log_note(&format!(
+                            "amb: session rotation failed ({e}); keeping the current session"
+                        ));
+                        rotate_at = Some(Instant::now() + ROTATE_RETRY);
                     }
                 }
-                Err(e) => {
-                    log_note(&format!(
-                        "amb: session rotation failed ({e}); keeping the current session"
-                    ));
-                    rotate_at = Some(Instant::now() + ROTATE_RETRY);
-                }
-            },
+            }
         }
     }
 }
@@ -795,7 +851,8 @@ fn replacement<L: Link, C: FnMut() -> Result<L>>(ctx: &Ctx<'_>, connect: &mut C)
 }
 
 /// Empty the old session's buffered frames before it is discarded. Returns
-/// whether `--max-events` was satisfied mid-drain.
+/// whether the caller should stop pumping (`--max-events` satisfied, Ctrl-C,
+/// or the `--duration` deadline).
 ///
 /// A link error here is the old session dying under the drain — its remaining
 /// frames are gone, but the replacement has been subscribed since before the
@@ -803,22 +860,54 @@ fn replacement<L: Link, C: FnMut() -> Result<L>>(ctx: &Ctx<'_>, connect: &mut C)
 /// keeps the copies straight. Emit errors still propagate: a broken pipe is
 /// about this process's stdout, not the discarded socket.
 fn drain<W: Write, L: Link>(link: &mut L, ctx: &Ctx<'_>, stream: &mut Stream<W>) -> Result<bool> {
+    let mut quiet = 0usize;
     for _ in 0..DRAIN_POLLS {
+        // The drain must stay as interruptible as the pump: with --hydrate a
+        // burst costs one blocking Table API call per event, and a Ctrl-C that
+        // waited for all of them would read as a hang.
+        if ctx.stop.load(Ordering::SeqCst) || past(ctx.deadline) {
+            return Ok(true);
+        }
         let events = match link.poll(DRAIN_WAIT) {
-            Ok(events) if events.is_empty() => break,
             Ok(events) => events,
             Err(_) => break,
         };
-        for event in events {
-            if !ctx.plan.filter.accepts(&event.data) {
-                continue;
+        if events.is_empty() {
+            // Ambiguous: a timeout, or a meta-only batch (see
+            // [`DRAIN_QUIET_POLLS`]). Only a run of them means dry.
+            quiet += 1;
+            if quiet >= DRAIN_QUIET_POLLS {
+                break;
             }
-            if stream.duplicate(&event.data) {
-                continue;
-            }
-            if stream.event(&shape(event, ctx.client, ctx.plan.hydrate.as_ref()))? {
-                return Ok(true);
-            }
+            continue;
+        }
+        quiet = 0;
+        if deliver(events, ctx, stream)? {
+            return Ok(true);
+        }
+    }
+    Ok(false)
+}
+
+/// Deliver one batch to the caller. Returns whether `--max-events` was
+/// satisfied.
+///
+/// The order here is the invariant, and it lives in this function rather than
+/// at its call sites: the filter first, so a discarded event costs nothing (no
+/// hydration call, no `--max-events` spend, no idle-clock reset — otherwise
+/// `--operation insert --idle-timeout 30` would be held open indefinitely by
+/// updates the caller said it did not want); the seam check second, still
+/// before hydration, so a duplicate costs no Table API call either.
+fn deliver<W: Write>(events: Vec<Event>, ctx: &Ctx<'_>, stream: &mut Stream<W>) -> Result<bool> {
+    for event in events {
+        if !ctx.plan.filter.accepts(&event.data) {
+            continue;
+        }
+        if stream.duplicate(&event.data) {
+            continue;
+        }
+        if stream.event(&shape(event, ctx.client, ctx.plan.hydrate.as_ref()))? {
+            return Ok(true);
         }
     }
     Ok(false)
@@ -843,22 +932,8 @@ fn pump<W: Write, L: Link>(
 
         // An empty batch means the poll simply expired — that is the tick that
         // lets the checks above run.
-        for event in link.poll(TICK)? {
-            // Filter first: a discarded event must not cost a hydration call,
-            // must not count against --max-events, and must not reset the idle
-            // clock — otherwise `--operation insert --idle-timeout 30` would be
-            // held open indefinitely by updates the caller said it did not want.
-            if !ctx.plan.filter.accepts(&event.data) {
-                continue;
-            }
-            // Then the seam check, still before hydration: the second copy of a
-            // write must not cost a Table API call either.
-            if stream.duplicate(&event.data) {
-                continue;
-            }
-            if stream.event(&shape(event, ctx.client, ctx.plan.hydrate.as_ref()))? {
-                return Ok(PumpEnd::Stopped);
-            }
+        if deliver(link.poll(TICK)?, ctx, stream)? {
+            return Ok(PumpEnd::Stopped);
         }
     }
 }
@@ -1013,18 +1088,46 @@ mod tests {
     #[test]
     fn dedup_distinguishes_writes_by_mod_count_and_operation() {
         let mut s = buffered(None);
+        s.open_seam();
         assert!(!s.duplicate(&keyed("update", "a1", 7)), "first sighting");
         assert!(s.duplicate(&keyed("update", "a1", 7)), "same write again");
         assert!(!s.duplicate(&keyed("update", "a1", 8)), "a real re-write");
         assert!(!s.duplicate(&keyed("delete", "a1", 8)), "another operation");
+        assert!(
+            s.duplicate(&keyed("delete", "a1", 8)),
+            "one delete per record"
+        );
+    }
+
+    #[test]
+    fn dedup_is_inert_outside_a_rotation_seam() {
+        // On the normal path nothing can arrive twice, so the dedup must not
+        // exist there — a false positive would eat a real event.
+        let mut s = buffered(None);
+        assert!(!s.duplicate(&keyed("update", "a1", 7)));
+        assert!(!s.duplicate(&keyed("update", "a1", 7)));
     }
 
     #[test]
     fn an_event_without_a_sys_id_is_never_a_duplicate() {
         // Dropping an unidentifiable event is worse than repeating one.
         let mut s = buffered(None);
+        s.open_seam();
         assert!(!s.duplicate(&update()));
         assert!(!s.duplicate(&update()));
+    }
+
+    #[test]
+    fn a_write_without_a_mod_count_is_never_a_duplicate() {
+        // Tables without sys_mod_count (syslog, measured) send events that
+        // cannot tell one write from the next. Two genuine writes inside one
+        // seam must both come through.
+        let bare = json!({"operation": "update", "sys_id": "a1",
+                          "changes": ["message"], "record": {}});
+        let mut s = buffered(None);
+        s.open_seam();
+        assert!(!s.duplicate(&bare));
+        assert!(!s.duplicate(&bare));
     }
 
     #[test]

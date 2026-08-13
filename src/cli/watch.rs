@@ -1,7 +1,7 @@
 //! `sn watch` — live record watchers over ServiceNow's AMB websocket.
 //!
 //! The protocol itself lives in [`crate::amb`]. This module is the policy layer:
-//! it turns a subcommand into a channel, supervises the socket (reconnect with
+//! it turns the arguments into a channel, supervises the socket (reconnect with
 //! backoff), enforces the termination limits that make an infinite stream usable
 //! from a script, filters events, and hydrates the survivors.
 //!
@@ -38,6 +38,13 @@
 //! message carries it, and a reconnect cannot ask for it. A watch is therefore a
 //! best-effort feed, not a log; anything that must be complete has to be
 //! reconciled against the table itself over the outage window.
+//!
+//! Drops are not rare, either: the instance reaps a watcher's HTTP session
+//! ~60–120s after it was minted (measured live; neither AMB traffic nor HTTP
+//! touches prevent it), which [`crate::amb::Amb::poll`] surfaces as a session
+//! drop the moment a connect reply reports it. Each reap costs one reconnect —
+//! on fresh cookies — and one marker; the alternative was a watcher that kept
+//! polling the dead session and silently delivered nothing forever.
 //!
 //! What the watcher can do honestly is say *where* the hole is. On a successful
 //! resubscribe after a drop it writes one synthetic line:
@@ -81,7 +88,7 @@ use crate::error::{Error, Result};
 use crate::observability::log_note;
 use crate::output::write_jsonl_line;
 use crate::query::GetQuery;
-use clap::{Subcommand, ValueEnum};
+use clap::ValueEnum;
 use serde_json::{json, Value};
 use std::io::{self, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -101,21 +108,9 @@ const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 /// fresh problem, not a continuation of a reconnect storm, so backoff restarts.
 const HEALTHY: Duration = Duration::from_secs(60);
 
-#[derive(Subcommand, Debug)]
-pub enum WatchSub {
-    #[command(about = "Watch records in a table matching a query or a single sys_id")]
-    Table(WatchTableArgs),
-    #[command(about = "Watch the count of records matching a query")]
-    Count(WatchCountArgs),
-    #[command(about = "Watch a record's activity stream (comments, work notes, field changes)")]
-    Activity(WatchActivityArgs),
-    #[command(about = "Subscribe to a raw AMB channel (escape hatch for unmodeled channels)")]
-    Channel(WatchChannelArgs),
-}
-
-/// Bounds shared by every watch. Without at least one of these the command runs
+/// Bounds on the stream. Without at least one of these the command runs
 /// forever, which is right for a terminal and useless inside a script — so they
-/// are on every subcommand rather than a special mode.
+/// sit beside the other flags rather than in a special mode.
 #[derive(clap::Args, Debug, Clone, Default)]
 pub struct WatchLimits {
     /// Stop cleanly after N events.
@@ -152,7 +147,7 @@ impl Operation {
 
 #[derive(clap::Args, Debug)]
 #[command(group = clap::ArgGroup::new("target").required(true).args(["query", "sys_id"]))]
-pub struct WatchTableArgs {
+pub struct WatchArgs {
     /// Table name (e.g. `incident`).
     pub table: String,
     /// Encoded query to watch, e.g. `priority=1^active=true`.
@@ -193,33 +188,6 @@ pub struct WatchTableArgs {
     /// they now get.
     #[arg(long, hide = true, conflicts_with = "hydrate")]
     pub no_hydrate: bool,
-    #[command(flatten)]
-    pub limits: WatchLimits,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct WatchCountArgs {
-    /// Table name (e.g. `incident`).
-    pub table: String,
-    /// Encoded query whose matching-record count to watch, e.g. `active=true^priority=1`.
-    #[arg(long, short = 'q', alias = "sysparm-query")]
-    pub query: String,
-    #[command(flatten)]
-    pub limits: WatchLimits,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct WatchActivityArgs {
-    /// sys_id of the record whose activity stream to watch.
-    pub sys_id: String,
-    #[command(flatten)]
-    pub limits: WatchLimits,
-}
-
-#[derive(clap::Args, Debug)]
-pub struct WatchChannelArgs {
-    /// Raw AMB channel, e.g. `/rw/default/incident/<base64>` or `/uxbannerannouncements`.
-    pub channel: String,
     #[command(flatten)]
     pub limits: WatchLimits,
 }
@@ -277,61 +245,37 @@ impl Filter {
     }
 }
 
-/// A resolved watch: the channels to subscribe to, what to keep, whether to
+/// A resolved watch: the channel to subscribe to, what to keep, whether to
 /// hydrate, and when to stop.
 struct Plan {
-    channels: Vec<String>,
+    channel: String,
     filter: Filter,
     hydrate: Option<Hydrate>,
     limits: WatchLimits,
 }
 
-pub fn run(global: &GlobalFlags, sub: WatchSub) -> Result<()> {
-    let plan = match sub {
-        WatchSub::Table(a) => {
-            // --sys-id is sugar for the filter the UI itself uses.
-            let filter = match (&a.query, &a.sys_id) {
-                (Some(q), _) => q.clone(),
-                (None, Some(id)) => format!("sys_id={id}"),
-                (None, None) => unreachable!("clap ArgGroup requires one"),
-            };
-            Plan {
-                channels: vec![amb::record_channel(&a.table, &filter)],
-                filter: Filter {
-                    operations: a.operation,
-                    on_change: a.on_change,
-                },
-                hydrate: a.hydrate.then(|| Hydrate {
-                    table: a.table.clone(),
-                    query: GetQuery {
-                        fields: a.fields.clone(),
-                        display_value: a.display_value.map(Into::into),
-                        ..Default::default()
-                    },
-                }),
-                limits: a.limits,
-            }
-        }
-        // Count, activity and raw-channel payloads carry neither `operation` nor
-        // `changes` nor a record, so there is nothing to filter or hydrate.
-        WatchSub::Count(a) => Plan {
-            channels: vec![amb::count_channel(&a.table, &a.query)],
-            filter: Filter::default(),
-            hydrate: None,
-            limits: a.limits,
+pub fn run(global: &GlobalFlags, a: WatchArgs) -> Result<()> {
+    // --sys-id is sugar for the filter the UI itself uses.
+    let filter = match (&a.query, &a.sys_id) {
+        (Some(q), _) => q.clone(),
+        (None, Some(id)) => format!("sys_id={id}"),
+        (None, None) => unreachable!("clap ArgGroup requires one"),
+    };
+    let plan = Plan {
+        channel: amb::record_channel(&a.table, &filter),
+        filter: Filter {
+            operations: a.operation,
+            on_change: a.on_change,
         },
-        WatchSub::Activity(a) => Plan {
-            channels: vec![amb::activity_channel(&a.sys_id)],
-            filter: Filter::default(),
-            hydrate: None,
-            limits: a.limits,
-        },
-        WatchSub::Channel(a) => Plan {
-            channels: vec![a.channel],
-            filter: Filter::default(),
-            hydrate: None,
-            limits: a.limits,
-        },
+        hydrate: a.hydrate.then(|| Hydrate {
+            table: a.table.clone(),
+            query: GetQuery {
+                fields: a.fields.clone(),
+                display_value: a.display_value.map(Into::into),
+                ..Default::default()
+            },
+        }),
+        limits: a.limits,
     };
     watch(global, plan)
 }
@@ -362,10 +306,14 @@ fn watch(global: &GlobalFlags, plan: Plan) -> Result<()> {
     let mut stream = Stream::new(io::stdout().lock(), plan.limits.max_events);
 
     // The quirk: AMB authenticates by session cookie, so an ordinary HTTP call
-    // has to mint one before each socket can be opened. It goes out over the
-    // normal client, so Basic and OAuth profiles both just work.
+    // has to mint one before each socket can be opened. Each attempt rebuilds
+    // the client rather than reusing the one above: for OAuth profiles that is
+    // what re-runs `ensure_access_token`, and reconnecting is the designed
+    // steady state (the instance reaps the session every minute or two), so a
+    // watch outliving its access token would otherwise die exit 4 at the first
+    // reconnect past expiry — with a usable refresh token sitting on disk.
     let mut connect = || -> Result<Amb> {
-        let cookies = client.session_cookies()?;
+        let cookies = build_client(&profile, global.timeout)?.session_cookies()?;
         Amb::connect(&base, &cookies, connect_timeout, &tls)
     };
     let mut wait = |d: Duration| sleep_interruptibly(d, &stop, deadline);
@@ -679,16 +627,11 @@ fn session<W: Write, L: Link, C: FnMut() -> Result<L>>(
 ) -> Result<()> {
     let mut link = connect()?;
 
-    for channel in &ctx.plan.channels {
-        link.subscribe(channel)?;
-    }
+    link.subscribe(&ctx.plan.channel)?;
     // Subscribed: from here on a failure is a blip in something that worked, so
     // it earns a reconnect rather than an immediate error.
     *established = true;
-    log_note(&format!(
-        "amb: subscribed to {}",
-        ctx.plan.channels.join(", ")
-    ));
+    log_note(&format!("amb: subscribed to {}", ctx.plan.channel));
 
     // Everything since `offline_since` was spent connecting, not listening. One
     // measurement, two uses: the idle clock forgives it, and the marker reports
@@ -965,9 +908,9 @@ mod tests {
 
     #[test]
     fn a_payload_without_the_keys_is_rejected_by_any_filter() {
-        // Count/activity payloads carry neither key; a filter must not silently
-        // treat "field absent" as "matches".
-        let bare = json!({"count": 7});
+        // A malformed or foreign payload carries neither key; a filter must not
+        // silently treat "field absent" as "matches".
+        let bare = json!({"unrelated": 7});
         assert!(!Filter {
             operations: vec![Operation::Update],
             ..Default::default()
@@ -1309,7 +1252,7 @@ mod tests {
     fn play<W: Write>(script: Script, stream: &mut Stream<W>) -> (Result<()>, Rc<RefCell<Log>>) {
         let log = Rc::new(RefCell::new(Log::default()));
         let plan = Plan {
-            channels: vec![CHANNEL.to_string()],
+            channel: CHANNEL.to_string(),
             filter: Filter::default(),
             hydrate: None,
             limits: WatchLimits::default(),
@@ -1670,9 +1613,11 @@ mod tests {
             message: "nope".into(),
             transaction_id: None,
         }));
-        // So will a table that does not exist.
+        // So will a table that does not exist — the subscribe refusal carries
+        // the NO_HTTP_STATUS sentinel (in-band failure, no HTTP error), and the
+        // sentinel must not make it retryable.
         assert!(!is_recoverable(&Error::Api {
-            status: 400,
+            status: crate::error::NO_HTTP_STATUS,
             message: "bad table".into(),
             detail: None,
             transaction_id: None,

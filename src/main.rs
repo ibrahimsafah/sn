@@ -92,7 +92,7 @@ fn run(cli: Cli) -> Result<()> {
             VariablesSub::Get(args) => sn::cli::variables::get(&global, args),
             VariablesSub::Set(args) => sn::cli::variables::set(&global, args),
         },
-        Command::Watch { sub } => sn::cli::watch::run(&global, sub),
+        Command::Watch(args) => sn::cli::watch::run(&global, args),
         Command::Schema { sub } => match sub {
             SchemaSub::Tables(args) => sn::cli::schema::tables(&global, args),
             SchemaSub::Columns(args) => sn::cli::schema::columns(&global, args),

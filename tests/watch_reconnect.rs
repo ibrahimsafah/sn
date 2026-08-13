@@ -45,7 +45,7 @@ async fn a_watch_that_never_connects_emits_no_reconnect_marker() {
     );
     let out = tokio::task::spawn_blocking(move || {
         sn_cmd(tmp.path())
-            .args(["watch", "table", "incident", "-q", "active=true"])
+            .args(["watch", "incident", "-q", "active=true"])
             .assert()
             .failure()
             .code(3) // transport

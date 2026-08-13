@@ -184,15 +184,12 @@ Streams record changes over ServiceNow's AMB websocket. **JSONL on stdout, one e
 
 ```bash
 # Bound the stream, or it runs until interrupted.
-sn watch table incident -q "priority=1^active=true" --max-events 5
-sn watch table incident --sys-id <SYS_ID> --duration 60      # stop after 60s
-sn watch table incident -q "active=true" --idle-timeout 30   # stop after 30s of quiet
+sn watch incident -q "priority=1^active=true" --max-events 5
+sn watch incident --sys-id <SYS_ID> --duration 60      # stop after 60s
+sn watch incident -q "active=true" --idle-timeout 30   # stop after 30s of quiet
 
-sn watch table incident -q "active=true" --operation insert           # only new records
-sn watch table incident -q "active=true" --on-change state,priority   # only these fields
-sn watch count incident -q "active=true"                              # count deltas
-sn watch activity <SYS_ID>                                            # comments / work notes
-sn watch channel '/uxbannerannouncements'                             # raw AMB channel
+sn watch incident -q "active=true" --operation insert           # only new records
+sn watch incident -q "active=true" --on-change state,priority   # only these fields
 ```
 
 **Events carry the changed fields WITH their new values.** `record` holds each field in `changes` as a `{display_value, value}` pair (+ a few `sys_*` audit cols). No API call — this is the default output:
@@ -210,8 +207,8 @@ sn watch channel '/uxbannerannouncements'                             # raw AMB 
 ⚠️ Gotchas:
 - **`changes` includes derived fields** — writing `urgency` also reports `priority` (ServiceNow recomputes it).
 - **Inserts list every populated field** (so an insert's `record` is the whole new row); **deletes carry `changes: []`**, so `--on-change` never matches a delete. A delete carries no `record` at all (`record: null` under `--hydrate`).
-- **`sn watch count` emits a delta, not a total**: `{"count":"+1"}` / `{"count":"-1"}` (strings). Seed with `sn aggregate <TABLE> --count --query <ENCODED_QUERY>` (same query as the watch) and accumulate.
 - **Not every line is an event.** After the socket drops and resubscribes, the stream carries one marker: `{"sn_watch":"reconnected","downtime_ms":4100,"attempt":2}`. AMB has no replay, so this is the only evidence the feed has a hole in it — everything that changed during `downtime_ms` is gone and no later line carries it. A consumer must tolerate it: it has no `operation` and no `changes`, so a `jq` predicate testing either drops it silently. Filter with `select(.sn_watch == null)` if you only want events, and treat its arrival as "re-read the table" if completeness matters. It is not an event: it does not count against `--max-events` and does not reset `--idle-timeout`. One marker per outage, not per attempt.
+- **Markers are routine.** ServiceNow reaps a watcher's HTTP session every minute or two regardless of traffic; the watcher detects the reap, reconnects on a fresh session, and writes a marker. A long watch carries periodic small-`downtime_ms` markers — expected, not a sign of trouble. The reap precedes detection by up to one ~30s long-poll cycle and that window is not in `downtime_ms`, so when completeness matters reconcile from shortly before the reported window.
 - **`--idle-timeout` measures subscribed time only** — connecting, handshaking and reconnecting are not idleness, so `--idle-timeout 1` cannot race a slow handshake. Silence still accumulates across a reconnect, so a socket flapping faster than the timeout can't hold a silent watcher open.
 - Ctrl-C exits 0. Exit 4 if the profile can't authenticate, 3 if the socket can't be established.
 - Works with basic **and** OAuth profiles. **No proxy support** (refused with exit 1, not silently bypassed); `--insecure`/`--ca-cert` do work.

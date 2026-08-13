@@ -1,5 +1,16 @@
 # Changelog
 
+## Unreleased
+
+### Breaking
+
+- `sn watch` is a single form: `sn watch <TABLE> (-q <QUERY> | --sys-id <SYS_ID>)`. Drop the word `table` from existing invocations; every flag is unchanged. The `count`, `activity` and `channel` subcommands are removed — `activity` delivered no events, and a `count` delta stream that dies mid-watch accumulates a silently wrong total.
+
+### Fixed
+
+- `sn watch` no longer goes silently dead when the instance invalidates its session (a minute or two in, on instances that reap API sessions): the watcher detects the invalidation, reconnects on a fresh session, and marks the gap with the usual `sn_watch: reconnected` line. Previously it kept polling the dead session forever, delivered nothing, and exited 0.
+- A refused AMB subscription (bad table, bad query) no longer reports `status_code: 400`. The refusal is in-band; no HTTP error occurred, so no status is published.
+
 ## 0.12.0 (2026-08-12)
 
 ### New commands

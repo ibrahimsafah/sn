@@ -28,7 +28,7 @@
 //! Multi-row variable sets (`sc_multi_row_question_answer`) are out of scope:
 //! they store row JSON, not per-variable values.
 
-use crate::body::{build_body, BodyInput};
+use crate::body::{self, EmptyBody};
 use crate::cli::journal::{validate_identifier, validate_sys_id};
 use crate::cli::kernel::{connect, write_response};
 use crate::cli::GlobalFlags;
@@ -98,14 +98,7 @@ pub fn get(global: &GlobalFlags, args: VariablesGetArgs) -> Result<()> {
 pub fn set(global: &GlobalFlags, args: VariablesSetArgs) -> Result<()> {
     validate_identifier(&args.table, "table")?;
     validate_sys_id(&args.sys_id)?;
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = body::from_flags(args.data, args.field, EmptyBody::Reject)?;
     let requested = body.as_object().expect("build_body returns an object");
     if requested.is_empty() {
         return Err(Error::Usage(

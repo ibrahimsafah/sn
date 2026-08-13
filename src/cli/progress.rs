@@ -1,5 +1,5 @@
 use crate::cli::kernel::{connect, emit, unwrap_or_raw, write_response};
-use crate::cli::{GlobalFlags, OutputMode};
+use crate::cli::{GlobalFlags, OutputMode, WaitArgs};
 use crate::client::Client;
 use crate::error::{Error, Result};
 use serde_json::Value;
@@ -26,10 +26,9 @@ pub(crate) fn finish_cicd(
     global: &GlobalFlags,
     client: &Client,
     out: Value,
-    wait: bool,
-    wait_timeout: Option<u64>,
+    wait: WaitArgs,
 ) -> Result<()> {
-    if wait {
+    if wait.wait {
         // Callers hand `out` over already shaped by `--output`, so under `raw`
         // the progress link sits one level down inside the untouched envelope.
         // Looking only at the top level made `--wait` a no-op there: no link
@@ -41,7 +40,7 @@ pub(crate) fn finish_cicd(
             .and_then(|p| p.get("id"))
             .and_then(|id| id.as_str())
         {
-            let final_result = wait_for_completion(client, progress_id, global, wait_timeout)?;
+            let final_result = wait_for_completion(client, progress_id, global, wait.wait_timeout)?;
             return write_response(global, &final_result);
         }
     }

@@ -1,6 +1,6 @@
-use crate::body::{build_body, BodyInput};
+use crate::body::EmptyBody;
 use crate::cli::kernel::{confirm_delete, confirm_destructive, connect, emit};
-use crate::cli::{DisplayValueArg, GlobalFlags, ADVANCED};
+use crate::cli::{BodyArgs, DisplayValueOpt, GlobalFlags, Paging, SetLimit, ADVANCED};
 use crate::error::{Error, Result};
 use clap::{Subcommand, ValueEnum};
 
@@ -64,26 +64,10 @@ pub struct ChangeListArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
-    #[arg(
-        long,
-        alias = "sysparm-limit",
-        alias = "limit",
-        alias = "setLimit",
-        default_value_t = 1000
-    )]
-    pub setlimit: u32,
-    /// Starting offset for manual pagination.
-    #[arg(long, alias = "sysparm-offset")]
-    pub offset: Option<u32>,
-    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        default_value = "true"
-    )]
-    pub display_value: Option<DisplayValueArg>,
+    #[command(flatten)]
+    pub paging: Paging<1000>,
+    #[command(flatten)]
+    pub display_value: DisplayValueOpt,
     /// Strip reference-link URLs from reference fields.
     #[arg(long, alias = "sysparm-exclude-reference-link", help_heading = ADVANCED)]
     pub exclude_reference_link: bool,
@@ -102,14 +86,8 @@ pub struct ChangeGetArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        default_value = "true"
-    )]
-    pub display_value: Option<DisplayValueArg>,
+    #[command(flatten)]
+    pub display_value: DisplayValueOpt,
     /// Strip reference-link URLs from reference fields.
     #[arg(long, alias = "sysparm-exclude-reference-link", help_heading = ADVANCED)]
     pub exclude_reference_link: bool,
@@ -126,23 +104,13 @@ pub struct ChangeCreateArgs {
     /// Standard change template sys_id (required for --type standard).
     #[arg(long)]
     pub template: Option<String>,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        default_value = "true"
-    )]
-    pub display_value: Option<DisplayValueArg>,
+    #[command(flatten)]
+    pub display_value: DisplayValueOpt,
 }
 
 #[derive(clap::Args, Debug)]
@@ -152,23 +120,13 @@ pub struct ChangeUpdateArgs {
     /// Change type: normal, emergency, or standard.
     #[arg(long, value_enum)]
     pub r#type: Option<ChangeType>,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        default_value = "true"
-    )]
-    pub display_value: Option<DisplayValueArg>,
+    #[command(flatten)]
+    pub display_value: DisplayValueOpt,
 }
 
 #[derive(clap::Args, Debug)]
@@ -199,24 +157,16 @@ pub struct ChangeOptionalIdArg {
 pub struct ChangeApprovalsArgs {
     /// sys_id of the change request.
     pub sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct ChangeRiskArgs {
     /// sys_id of the change request.
     pub sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -240,15 +190,8 @@ pub struct ChangeTaskListArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
-    #[arg(
-        long,
-        alias = "sysparm-limit",
-        alias = "limit",
-        alias = "setLimit",
-        default_value_t = 100
-    )]
-    pub setlimit: u32,
+    #[command(flatten)]
+    pub limit: SetLimit<100>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -263,12 +206,8 @@ pub struct ChangeTaskGetArgs {
 pub struct ChangeTaskCreateArgs {
     /// sys_id of the parent change request.
     pub change_sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 #[derive(clap::Args, Debug)]
@@ -277,12 +216,8 @@ pub struct ChangeTaskUpdateArgs {
     pub change_sys_id: String,
     /// sys_id of the change task.
     pub task_sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 #[derive(clap::Args, Debug)]
@@ -308,12 +243,8 @@ pub enum ChangeCiSub {
 pub struct ChangeCiAddArgs {
     /// sys_id of the parent change request.
     pub change_sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 #[derive(Subcommand, Debug)]
@@ -342,12 +273,8 @@ pub struct ChangeConflictRemoveArgs {
 pub struct ChangeConflictAddArgs {
     /// sys_id of the change request.
     pub sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 fn base_path(ct: Option<ChangeType>) -> &'static str {
@@ -369,11 +296,11 @@ pub fn list(global: &GlobalFlags, args: ChangeListArgs) -> Result<()> {
     if let Some(v) = args.fields {
         query.push(("sysparm_fields".into(), v));
     }
-    query.push(("sysparm_limit".into(), args.setlimit.to_string()));
-    if let Some(v) = args.offset {
+    query.push(("sysparm_limit".into(), args.paging.setlimit().to_string()));
+    if let Some(v) = args.paging.offset {
         query.push(("sysparm_offset".into(), v.to_string()));
     }
-    if let Some(v) = args.display_value {
+    if let Some(v) = args.display_value.display_value {
         let dv: crate::query::DisplayValue = v.into();
         query.push(("sysparm_display_value".into(), dv.as_str().into()));
     }
@@ -394,7 +321,7 @@ pub fn get(global: &GlobalFlags, args: ChangeGetArgs) -> Result<()> {
     if let Some(v) = args.fields {
         query.push(("sysparm_fields".into(), v));
     }
-    if let Some(v) = args.display_value {
+    if let Some(v) = args.display_value.display_value {
         let dv: crate::query::DisplayValue = v.into();
         query.push(("sysparm_display_value".into(), dv.as_str().into()));
     }
@@ -419,19 +346,12 @@ pub fn create(global: &GlobalFlags, args: ChangeCreateArgs) -> Result<()> {
         }
         _ => base_path(Some(args.r#type)).to_string(),
     };
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::Data("{}".into())
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Object)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.fields {
         query.push(("sysparm_fields".into(), v));
     }
-    if let Some(v) = args.display_value {
+    if let Some(v) = args.display_value.display_value {
         let dv: crate::query::DisplayValue = v.into();
         query.push(("sysparm_display_value".into(), dv.as_str().into()));
     }
@@ -442,19 +362,12 @@ pub fn create(global: &GlobalFlags, args: ChangeCreateArgs) -> Result<()> {
 pub fn update(global: &GlobalFlags, args: ChangeUpdateArgs) -> Result<()> {
     let client = connect(global)?;
     let path = format!("{}/{}", base_path(args.r#type), args.sys_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let mut query: Vec<(String, String)> = Vec::new();
     if let Some(v) = args.fields {
         query.push(("sysparm_fields".into(), v));
     }
-    if let Some(v) = args.display_value {
+    if let Some(v) = args.display_value.display_value {
         let dv: crate::query::DisplayValue = v.into();
         query.push(("sysparm_display_value".into(), dv.as_str().into()));
     }
@@ -480,14 +393,7 @@ pub fn nextstates(global: &GlobalFlags, args: ChangeSysIdArg) -> Result<()> {
 pub fn approvals(global: &GlobalFlags, args: ChangeApprovalsArgs) -> Result<()> {
     let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/approvals", args.sys_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let resp = client.patch(&path, &[], &body)?;
     emit(global, resp)
 }
@@ -495,14 +401,7 @@ pub fn approvals(global: &GlobalFlags, args: ChangeApprovalsArgs) -> Result<()> 
 pub fn risk(global: &GlobalFlags, args: ChangeRiskArgs) -> Result<()> {
     let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/risk", args.sys_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let resp = client.patch(&path, &[], &body)?;
     emit(global, resp)
 }
@@ -551,7 +450,7 @@ fn task_list(global: &GlobalFlags, args: ChangeTaskListArgs) -> Result<()> {
     if let Some(v) = args.fields {
         query.push(("sysparm_fields".into(), v));
     }
-    query.push(("sysparm_limit".into(), args.setlimit.to_string()));
+    query.push(("sysparm_limit".into(), args.limit.setlimit.to_string()));
     let resp = client.get(&path, &query)?;
     emit(global, resp)
 }
@@ -569,14 +468,7 @@ fn task_get(global: &GlobalFlags, args: ChangeTaskGetArgs) -> Result<()> {
 fn task_create(global: &GlobalFlags, args: ChangeTaskCreateArgs) -> Result<()> {
     let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/task", args.change_sys_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::Data("{}".into())
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Object)?;
     let resp = client.post(&path, &[], &body)?;
     emit(global, resp)
 }
@@ -587,14 +479,7 @@ fn task_update(global: &GlobalFlags, args: ChangeTaskUpdateArgs) -> Result<()> {
         "/api/sn_chg_rest/change/{}/task/{}",
         args.change_sys_id, args.task_sys_id
     );
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let resp = client.patch(&path, &[], &body)?;
     emit(global, resp)
 }
@@ -630,14 +515,7 @@ fn ci_list(global: &GlobalFlags, args: ChangeSysIdArg) -> Result<()> {
 fn ci_add(global: &GlobalFlags, args: ChangeCiAddArgs) -> Result<()> {
     let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/ci", args.change_sys_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let resp = client.post(&path, &[], &body)?;
     emit(global, resp)
 }
@@ -660,14 +538,7 @@ fn conflict_get(global: &GlobalFlags, args: ChangeSysIdArg) -> Result<()> {
 fn conflict_add(global: &GlobalFlags, args: ChangeConflictAddArgs) -> Result<()> {
     let client = connect(global)?;
     let path = format!("/api/sn_chg_rest/change/{}/conflict", args.sys_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let resp = client.post(&path, &[], &body)?;
     emit(global, resp)
 }

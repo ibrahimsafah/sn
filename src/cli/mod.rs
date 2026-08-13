@@ -1,6 +1,7 @@
 pub mod aggregate;
 pub mod api;
 pub mod app;
+pub mod args;
 pub mod atf;
 pub mod attachment;
 pub mod auth;
@@ -31,6 +32,7 @@ pub mod watch;
 pub use aggregate::AggregateArgs;
 pub use api::{ApiListArgs, ApiSearchArgs, ApiSpecArgs, ApiSub, SpecFormat};
 pub use app::{AppInstallArgs, AppPublishArgs, AppRollbackArgs, AppSub};
+pub use args::{BodyArgs, DisplayValueArg, DisplayValueOpt, Paging, SetLimit, WaitArgs};
 pub use atf::{AtfResultsArgs, AtfRunArgs, AtfSub};
 pub use attachment::{
     AttachmentDeleteArgs, AttachmentDownloadArgs, AttachmentGetArgs, AttachmentListArgs,
@@ -66,8 +68,7 @@ pub use raw::RawArgs;
 pub use schema::{SchemaChoicesArgs, SchemaColumnsArgs, SchemaSub, SchemaTablesArgs};
 pub use scores::{ScoresFavoriteArgs, ScoresListArgs, ScoresSub, SortBy, SortDir};
 pub use table::{
-    DisplayValueArg, TableCreateArgs, TableDeleteArgs, TableGetArgs, TableListArgs, TableSub,
-    TableUpdateArgs,
+    TableCreateArgs, TableDeleteArgs, TableGetArgs, TableListArgs, TableSub, TableUpdateArgs,
 };
 pub use update_set::{
     UpdateSetBackOutArgs, UpdateSetCommitMultipleArgs, UpdateSetCreateArgs, UpdateSetIdArg,

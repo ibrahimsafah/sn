@@ -1,6 +1,6 @@
-use crate::body::{build_body, BodyInput};
+use crate::body::EmptyBody;
 use crate::cli::kernel::{connect, emit};
-use crate::cli::GlobalFlags;
+use crate::cli::{BodyArgs, GlobalFlags};
 use crate::error::{Error, Result};
 use clap::Subcommand;
 use serde_json::Value;
@@ -19,12 +19,8 @@ pub enum ImportSub {
 pub struct ImportCreateArgs {
     /// Staging table name.
     pub staging_table: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 #[derive(clap::Args, Debug)]
@@ -47,14 +43,7 @@ pub struct ImportGetArgs {
 pub fn create(global: &GlobalFlags, args: ImportCreateArgs) -> Result<()> {
     let client = connect(global)?;
     let path = format!("/api/now/import/{}", args.staging_table);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let resp = client.post(&path, &[], &body)?;
     emit(global, resp)
 }

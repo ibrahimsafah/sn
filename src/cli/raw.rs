@@ -1,4 +1,4 @@
-use crate::body::{build_body, BodyInput};
+use crate::body::{self, EmptyBody};
 use crate::cli::GlobalFlags;
 use crate::error::{Error, Result};
 use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
@@ -129,17 +129,7 @@ fn ensure_no_body(data: &Option<String>, field: &[String]) -> Result<()> {
 }
 
 fn build_request_body(data: Option<String>, field: Vec<String>) -> Result<Value> {
-    if data.is_none() && field.is_empty() {
-        return Ok(Value::Object(Default::default()));
-    }
-    let input = if let Some(d) = data {
-        BodyInput::Data(d)
-    } else if !field.is_empty() {
-        BodyInput::Fields(field)
-    } else {
-        BodyInput::None
-    };
-    build_body(input)
+    body::from_flags(data, field, EmptyBody::Object)
 }
 
 #[cfg(test)]

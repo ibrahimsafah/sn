@@ -23,6 +23,43 @@ pub fn build_body(input: BodyInput) -> Result<Value> {
     }
 }
 
+/// What an empty pair (neither `--data` nor `--field` given) means at a call
+/// site. The write commands share everything about body parsing except this,
+/// so it stays a per-site decision rather than a default.
+#[derive(Clone, Copy, Debug)]
+pub enum EmptyBody {
+    /// A usage error — the endpoint cannot do anything with an empty write.
+    Reject,
+    /// Send `{}` — the endpoint accepts an empty payload (ordering a catalog
+    /// item with no variables, creating a change from its type's defaults).
+    Object,
+}
+
+/// The `--data`/`--field` pair as a [`BodyInput`]. `--data` is checked first,
+/// but clap's `conflicts_with` has already rejected the pair together.
+pub fn input_from(data: Option<String>, field: Vec<String>) -> BodyInput {
+    if let Some(d) = data {
+        BodyInput::Data(d)
+    } else if !field.is_empty() {
+        BodyInput::Fields(field)
+    } else {
+        BodyInput::None
+    }
+}
+
+/// Parse the `--data`/`--field` pair into a JSON body, resolving an empty
+/// pair per `empty`.
+pub fn from_flags(data: Option<String>, field: Vec<String>, empty: EmptyBody) -> Result<Value> {
+    let input = match input_from(data, field) {
+        BodyInput::None => match empty {
+            EmptyBody::Reject => BodyInput::None,
+            EmptyBody::Object => BodyInput::Data("{}".into()),
+        },
+        input => input,
+    };
+    build_body(input)
+}
+
 fn parse_data_spec(raw: &str) -> Result<Value> {
     let value = parse_data_value(raw)?;
     if !value.is_object() {

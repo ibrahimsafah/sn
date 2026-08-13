@@ -41,6 +41,7 @@ src/
   cli/
     mod.rs          → Cli struct, GlobalFlags, all Subcommand enums + arg structs
     kernel.rs       → the shared command kernel: connect()/emit(), build_profile/build_client/build_client_with_headers, write_response/unwrap_or_raw/take_field/bool_opt, confirm_destructive/confirm_delete
+    args.rs         → shared clap arg vocabulary, flattened into the command modules' arg structs: BodyArgs (--data/--field), WaitArgs (--wait/--wait-timeout), DisplayValueOpt, SetLimit/Paging (const-generic per-site defaults), DisplayValueArg. Flatten position is help order; a site whose help text differs keeps its own declaration
     init.rs         → sn init (onboarding wizard: profile setup + verification, and ALWAYS claims default_profile); a thin policy layer over profile.rs's core
     auth.rs         → sn auth login/logout/status/refresh (OAuth session commands; login runs the flow for a configured oauth profile, no config mutation) + whoami (authenticated-identity read, shared with profile.rs)
     profile.rs      → sn profile add/list/show/remove/use + the shared profile-writing core (ProfileInput, resolve_name/resolve_input, save_and_verify) used by both `add` and `init`

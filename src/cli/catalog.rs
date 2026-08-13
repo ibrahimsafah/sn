@@ -1,6 +1,6 @@
-use crate::body::{build_body, BodyInput};
+use crate::body::EmptyBody;
 use crate::cli::kernel::{confirm_destructive, connect, emit};
-use crate::cli::GlobalFlags;
+use crate::cli::{BodyArgs, GlobalFlags, Paging};
 use crate::error::Result;
 use clap::Subcommand;
 
@@ -57,18 +57,8 @@ pub struct CatalogGetArgs {
 pub struct CatalogCategoriesArgs {
     /// Catalog sys_id.
     pub catalog_sys_id: String,
-    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
-    #[arg(
-        long,
-        alias = "sysparm-limit",
-        alias = "limit",
-        alias = "setLimit",
-        default_value_t = 100
-    )]
-    pub setlimit: u32,
-    /// Starting offset for manual pagination.
-    #[arg(long, alias = "sysparm-offset")]
-    pub offset: Option<u32>,
+    #[command(flatten)]
+    pub paging: Paging<100>,
     /// Show only top-level categories.
     #[arg(long, alias = "sysparm-top-level-only")]
     pub top_level_only: bool,
@@ -94,18 +84,8 @@ pub struct CatalogItemsArgs {
     /// Filter by type (e.g. `record_producer`).
     #[arg(long, alias = "sysparm-type")]
     pub item_type: Option<String>,
-    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
-    #[arg(
-        long,
-        alias = "sysparm-limit",
-        alias = "limit",
-        alias = "setLimit",
-        default_value_t = 100
-    )]
-    pub setlimit: u32,
-    /// Starting offset for manual pagination.
-    #[arg(long, alias = "sysparm-offset")]
-    pub offset: Option<u32>,
+    #[command(flatten)]
+    pub paging: Paging<100>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -118,24 +98,16 @@ pub struct CatalogItemArgs {
 pub struct CatalogOrderArgs {
     /// sys_id of the catalog item.
     pub sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct CatalogCartUpdateArgs {
     /// sys_id of the cart item.
     pub cart_item_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
 }
 
 #[derive(clap::Args, Debug)]
@@ -179,8 +151,8 @@ pub fn categories(global: &GlobalFlags, args: CatalogCategoriesArgs) -> Result<(
     let client = connect(global)?;
     let path = format!("{BASE}/catalogs/{}/categories", args.catalog_sys_id);
     let mut query: Vec<(String, String)> = Vec::new();
-    query.push(("sysparm_limit".into(), args.setlimit.to_string()));
-    if let Some(v) = args.offset {
+    query.push(("sysparm_limit".into(), args.paging.setlimit().to_string()));
+    if let Some(v) = args.paging.offset {
         query.push(("sysparm_offset".into(), v.to_string()));
     }
     if args.top_level_only {
@@ -212,8 +184,8 @@ pub fn items(global: &GlobalFlags, args: CatalogItemsArgs) -> Result<()> {
     if let Some(v) = args.item_type {
         query.push(("sysparm_type".into(), v));
     }
-    query.push(("sysparm_limit".into(), args.setlimit.to_string()));
-    if let Some(v) = args.offset {
+    query.push(("sysparm_limit".into(), args.paging.setlimit().to_string()));
+    if let Some(v) = args.paging.offset {
         query.push(("sysparm_offset".into(), v.to_string()));
     }
     let resp = client.get(&format!("{BASE}/items"), &query)?;
@@ -237,14 +209,7 @@ pub fn item_variables(global: &GlobalFlags, args: CatalogItemArgs) -> Result<()>
 pub fn order(global: &GlobalFlags, args: CatalogOrderArgs) -> Result<()> {
     let client = connect(global)?;
     let path = format!("{BASE}/items/{}/order_now", args.sys_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::Data("{}".into())
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Object)?;
     let resp = client.post(&path, &[], &body)?;
     emit(global, resp)
 }
@@ -252,14 +217,7 @@ pub fn order(global: &GlobalFlags, args: CatalogOrderArgs) -> Result<()> {
 pub fn add_to_cart(global: &GlobalFlags, args: CatalogOrderArgs) -> Result<()> {
     let client = connect(global)?;
     let path = format!("{BASE}/items/{}/add_to_cart", args.sys_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::Data("{}".into())
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Object)?;
     let resp = client.post(&path, &[], &body)?;
     emit(global, resp)
 }
@@ -273,14 +231,7 @@ pub fn cart(global: &GlobalFlags) -> Result<()> {
 pub fn cart_update(global: &GlobalFlags, args: CatalogCartUpdateArgs) -> Result<()> {
     let client = connect(global)?;
     let path = format!("{BASE}/cart/{}", args.cart_item_id);
-    let body_input = if let Some(d) = args.data {
-        BodyInput::Data(d)
-    } else if !args.field.is_empty() {
-        BodyInput::Fields(args.field)
-    } else {
-        BodyInput::None
-    };
-    let body = build_body(body_input)?;
+    let body = args.body.build(EmptyBody::Reject)?;
     let resp = client.put(&path, &[], &body)?;
     emit(global, resp)
 }

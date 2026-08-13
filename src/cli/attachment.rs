@@ -1,5 +1,5 @@
 use crate::cli::kernel::{confirm_delete, connect, emit, write_response};
-use crate::cli::GlobalFlags;
+use crate::cli::{GlobalFlags, Paging};
 use crate::client::{Download, DownloadError};
 use crate::error::{Error, Result};
 use clap::Subcommand;
@@ -27,18 +27,8 @@ pub struct AttachmentListArgs {
     /// Encoded query, e.g. `active=true^priority=1`.
     #[arg(long, short = 'q', alias = "sysparm-query")]
     pub query: Option<String>,
-    /// Maximum records returned. Maps to sysparm_limit. Also spelled --limit or --setLimit.
-    #[arg(
-        long,
-        alias = "sysparm-limit",
-        alias = "limit",
-        alias = "setLimit",
-        default_value_t = 100
-    )]
-    pub setlimit: u32,
-    /// Starting offset for manual pagination.
-    #[arg(long, alias = "sysparm-offset")]
-    pub offset: Option<u32>,
+    #[command(flatten)]
+    pub paging: Paging<100>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -99,8 +89,8 @@ pub fn list(global: &GlobalFlags, args: AttachmentListArgs) -> Result<()> {
     if let Some(v) = args.query {
         query.push(("sysparm_query".into(), v));
     }
-    query.push(("sysparm_limit".into(), args.setlimit.to_string()));
-    if let Some(v) = args.offset {
+    query.push(("sysparm_limit".into(), args.paging.setlimit().to_string()));
+    if let Some(v) = args.paging.offset {
         query.push(("sysparm_offset".into(), v.to_string()));
     }
     let resp = client.get("/api/now/attachment", &query)?;

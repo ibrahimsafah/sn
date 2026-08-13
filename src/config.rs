@@ -74,6 +74,15 @@ impl OAuthGrant {
     fn is_default(&self) -> bool {
         matches!(self, OAuthGrant::AuthorizationCode)
     }
+
+    /// The wire/TOML spelling, matching the serde and clap `snake_case`
+    /// renames above — what `sn auth`/`sn profile` report as `grant`.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            OAuthGrant::AuthorizationCode => "authorization_code",
+            OAuthGrant::ClientCredentials => "client_credentials",
+        }
+    }
 }
 
 fn default_true() -> bool {

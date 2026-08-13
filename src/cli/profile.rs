@@ -109,13 +109,6 @@ fn auth_str(method: AuthMethod) -> &'static str {
     }
 }
 
-fn grant_str(g: OAuthGrant) -> &'static str {
-    match g {
-        OAuthGrant::AuthorizationCode => "authorization_code",
-        OAuthGrant::ClientCredentials => "client_credentials",
-    }
-}
-
 // ---------------------------------------------------------------------------
 // Shared profile-writing core, used by `sn profile add` and `sn init`.
 //
@@ -741,7 +734,7 @@ fn add(global: &GlobalFlags, args: ProfileAddArgs) -> Result<()> {
         "verified": !args.no_verify,
     });
     if matches!(input.auth, AuthMethod::Oauth) {
-        out["grant"] = json!(grant_str(input.grant));
+        out["grant"] = json!(input.grant.as_str());
         out["loggedIn"] = json!(!args.no_verify);
         if args.no_verify {
             out["next"] = json!(format!("sn auth login --profile {}", input.name));
@@ -807,7 +800,7 @@ fn show(global: &GlobalFlags, name: Option<String>) -> Result<()> {
         AuthMethod::Oauth => {
             if let Some(o) = &p.oauth {
                 out["client_id"] = json!(o.client_id);
-                out["grant"] = json!(grant_str(o.grant));
+                out["grant"] = json!(o.grant.as_str());
                 out["redirect_uri"] =
                     json!(o.redirect_uri.clone().unwrap_or_else(default_redirect_uri));
                 out["pkce"] = json!(o.pkce);

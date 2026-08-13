@@ -1,9 +1,9 @@
 use crate::body::{build_body, BodyInput};
 use crate::cli::kernel::{bool_opt, confirm_delete, connect, emit, write_response};
-use crate::cli::{GlobalFlags, OutputMode, ADVANCED};
+use crate::cli::{BodyArgs, DisplayValueOpt, GlobalFlags, OutputMode, ADVANCED};
 use crate::error::{Error, Result};
 use crate::query::{DeleteQuery, GetQuery, ListQuery, WriteQuery};
-use clap::{Subcommand, ValueEnum};
+use clap::Subcommand;
 use serde_json::Value;
 use std::io;
 
@@ -19,24 +19,6 @@ pub enum TableSub {
     Update(TableUpdateArgs),
     #[command(about = "Delete a record")]
     Delete(TableDeleteArgs),
-}
-
-#[derive(Clone, Copy, Debug, ValueEnum)]
-#[value(rename_all = "lowercase")]
-pub enum DisplayValueArg {
-    True,
-    False,
-    All,
-}
-
-impl From<DisplayValueArg> for crate::query::DisplayValue {
-    fn from(v: DisplayValueArg) -> Self {
-        match v {
-            DisplayValueArg::True => crate::query::DisplayValue::True,
-            DisplayValueArg::False => crate::query::DisplayValue::False,
-            DisplayValueArg::All => crate::query::DisplayValue::All,
-        }
-    }
 }
 
 #[derive(clap::Args, Debug)]
@@ -62,14 +44,8 @@ pub struct TableListArgs {
     /// Starting offset for manual pagination (ignored with --all).
     #[arg(long, alias = "sysparm-offset")]
     pub offset: Option<u32>,
-    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        default_value = "true"
-    )]
-    pub display_value: Option<DisplayValueArg>,
+    #[command(flatten)]
+    pub display_value: DisplayValueOpt,
     /// Strip reference-link URLs from reference fields.
     #[arg(
         long,
@@ -116,14 +92,8 @@ pub struct TableGetArgs {
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        default_value = "true"
-    )]
-    pub display_value: Option<DisplayValueArg>,
+    #[command(flatten)]
+    pub display_value: DisplayValueOpt,
     /// Strip reference-link URLs from reference fields.
     #[arg(
         long,
@@ -143,23 +113,13 @@ pub struct TableGetArgs {
 pub struct TableCreateArgs {
     /// Table name (e.g. `incident`).
     pub table: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
     /// Comma-separated fields to return on the created record.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        default_value = "true"
-    )]
-    pub display_value: Option<DisplayValueArg>,
+    #[command(flatten)]
+    pub display_value: DisplayValueOpt,
     /// Strip reference-link URLs from reference fields.
     #[arg(
         long,
@@ -188,23 +148,13 @@ pub struct TableUpdateArgs {
     pub table: String,
     /// sys_id of the record to patch.
     pub sys_id: String,
-    /// Body source: inline JSON, @file (path), or @- (stdin). Use a file to avoid shell quoting on multi-line values.
-    #[arg(long, short = 'D', conflicts_with = "field")]
-    pub data: Option<String>,
-    /// Repeatable name=value. Use name=@file to read the value from a file (e.g. multi-line text). Mutually exclusive with --data.
-    #[arg(long = "field", short = 'F', conflicts_with = "data")]
-    pub field: Vec<String>,
+    #[command(flatten)]
+    pub body: BodyArgs,
     /// Comma-separated fields to return on the updated record.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
-    /// Resolve reference/choice fields: true (display values), false (raw), or all (both).
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        default_value = "true"
-    )]
-    pub display_value: Option<DisplayValueArg>,
+    #[command(flatten)]
+    pub display_value: DisplayValueOpt,
     /// Strip reference-link URLs from reference fields.
     #[arg(
         long,
@@ -265,7 +215,7 @@ pub fn list(global: &GlobalFlags, args: TableListArgs) -> Result<()> {
         fields: args.fields,
         page_size: Some(args.setlimit),
         offset: if paginate { None } else { args.offset },
-        display_value: args.display_value.map(Into::into),
+        display_value: args.display_value.display_value.map(Into::into),
         exclude_reference_link: bool_opt(args.exclude_reference_link),
         suppress_pagination_header: bool_opt(args.suppress_pagination_header),
         view: args.view,
@@ -336,7 +286,7 @@ pub fn get(global: &GlobalFlags, args: TableGetArgs) -> Result<()> {
     let client = connect(global)?;
     let q = GetQuery {
         fields: args.fields,
-        display_value: args.display_value.map(Into::into),
+        display_value: args.display_value.display_value.map(Into::into),
         exclude_reference_link: bool_opt(args.exclude_reference_link),
         view: args.view,
         query_no_domain: bool_opt(args.query_no_domain),
@@ -347,22 +297,12 @@ pub fn get(global: &GlobalFlags, args: TableGetArgs) -> Result<()> {
 }
 
 pub fn create(global: &GlobalFlags, args: TableCreateArgs) -> Result<()> {
-    let body_input = match (args.data, args.field.is_empty()) {
-        (Some(d), true) => BodyInput::Data(d),
-        (None, false) => BodyInput::Fields(args.field),
-        (None, true) => return Err(Error::Usage("provide --data or one or more --field".into())),
-        (Some(_), false) => {
-            return Err(Error::Usage(
-                "--data and --field are mutually exclusive".into(),
-            ))
-        }
-    };
-    let body = build_body(body_input)?;
+    let body = require_body(args.body)?;
 
     let client = connect(global)?;
     let q = WriteQuery {
         fields: args.fields,
-        display_value: args.display_value.map(Into::into),
+        display_value: args.display_value.display_value.map(Into::into),
         exclude_reference_link: bool_opt(args.exclude_reference_link),
         input_display_value: bool_opt(args.input_display_value),
         suppress_auto_sys_field: bool_opt(args.suppress_auto_sys_field),
@@ -375,61 +315,30 @@ pub fn create(global: &GlobalFlags, args: TableCreateArgs) -> Result<()> {
 }
 
 pub fn update(global: &GlobalFlags, args: TableUpdateArgs) -> Result<()> {
-    write_op(
-        global,
-        args.table,
-        args.sys_id,
-        args.data,
-        args.field,
-        args.fields,
-        args.display_value,
-        args.exclude_reference_link,
-        args.input_display_value,
-        args.suppress_auto_sys_field,
-        args.view,
-        args.query_no_domain,
-    )
-}
-
-#[allow(clippy::too_many_arguments)]
-fn write_op(
-    global: &GlobalFlags,
-    table: String,
-    sys_id: String,
-    data: Option<String>,
-    field: Vec<String>,
-    fields: Option<String>,
-    display_value: Option<DisplayValueArg>,
-    exclude_reference_link: bool,
-    input_display_value: bool,
-    suppress_auto_sys_field: bool,
-    view: Option<String>,
-    query_no_domain: bool,
-) -> Result<()> {
-    let body_input = match (data, field.is_empty()) {
-        (Some(d), true) => BodyInput::Data(d),
-        (None, false) => BodyInput::Fields(field),
-        (None, true) => return Err(Error::Usage("provide --data or one or more --field".into())),
-        (Some(_), false) => {
-            return Err(Error::Usage(
-                "--data and --field are mutually exclusive".into(),
-            ))
-        }
-    };
-    let body = build_body(body_input)?;
+    let body = require_body(args.body)?;
     let client = connect(global)?;
     let q = WriteQuery {
-        fields,
-        display_value: display_value.map(Into::into),
-        exclude_reference_link: bool_opt(exclude_reference_link),
-        input_display_value: bool_opt(input_display_value),
-        suppress_auto_sys_field: bool_opt(suppress_auto_sys_field),
-        view,
-        query_no_domain: bool_opt(query_no_domain),
+        fields: args.fields,
+        display_value: args.display_value.display_value.map(Into::into),
+        exclude_reference_link: bool_opt(args.exclude_reference_link),
+        input_display_value: bool_opt(args.input_display_value),
+        suppress_auto_sys_field: bool_opt(args.suppress_auto_sys_field),
+        view: args.view,
+        query_no_domain: bool_opt(args.query_no_domain),
     };
-    let path = format!("/api/now/table/{}/{}", table, sys_id);
+    let path = format!("/api/now/table/{}/{}", args.table, args.sys_id);
     let resp = client.patch(&path, &q.to_pairs(), &body)?;
     emit(global, resp)
+}
+
+/// Table's writes shipped their own empty-pair message before `build_body`
+/// grew one; the wording is observable stderr, so it stays rather than
+/// silently becoming [`crate::body::EmptyBody::Reject`]'s.
+fn require_body(body: BodyArgs) -> Result<Value> {
+    match body.into_input() {
+        BodyInput::None => Err(Error::Usage("provide --data or one or more --field".into())),
+        input => build_body(input),
+    }
 }
 
 pub fn delete(global: &GlobalFlags, args: TableDeleteArgs) -> Result<()> {

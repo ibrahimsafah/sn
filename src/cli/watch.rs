@@ -108,6 +108,26 @@ const MAX_RECONNECT_ATTEMPTS: u32 = 10;
 /// fresh problem, not a continuation of a reconnect storm, so backoff restarts.
 const HEALTHY: Duration = Duration::from_secs(60);
 
+/// How soon to try rotating again after a failed rotation attempt. Short,
+/// because the clock is ticking toward the instance's session reaper: a
+/// replacement that cannot be built before the reap fires means falling back to
+/// the reactive reconnect path and its gap.
+const ROTATE_RETRY: Duration = Duration::from_secs(10);
+
+/// How long one drain poll waits for the old session's buffered frames. They
+/// are already in the socket buffer, so this is latency budget, not a hold.
+const DRAIN_WAIT: Duration = Duration::from_millis(100);
+
+/// Upper bound on drain polls, so a session delivering a flood cannot pin the
+/// watcher on a socket that is about to be discarded anyway — anything past
+/// this is also flowing on the already-subscribed replacement.
+const DRAIN_POLLS: usize = 50;
+
+/// How long an emitted event's key is remembered for seam deduplication. The
+/// rotation overlap it exists for is a few seconds wide; a minute of memory
+/// covers it with a wide margin without growing unbounded.
+const DEDUP_TTL: Duration = Duration::from_secs(60);
+
 /// Bounds on the stream. Without at least one of these the command runs
 /// forever, which is right for a terminal and useless inside a script — so they
 /// sit beside the other flags rather than in a special mode.
@@ -183,6 +203,11 @@ pub struct WatchArgs {
         requires = "hydrate"
     )]
     pub display_value: Option<DisplayValueArg>,
+    /// Replace the session every N seconds, before the instance can reap it
+    /// (measured floor ~60s). The replacement subscribes before the old session
+    /// disconnects, so rotation opens no gap. 0 disables rotation.
+    #[arg(long, value_name = "SECS", default_value_t = 45)]
+    pub session_rotate: u64,
     /// Deprecated: not hydrating is now the default. Accepted as a no-op so
     /// scripts written against 0.9.1 keep working — they already ask for what
     /// they now get.
@@ -252,6 +277,9 @@ struct Plan {
     filter: Filter,
     hydrate: Option<Hydrate>,
     limits: WatchLimits,
+    /// Replace the session this often, before the instance's reaper can. `None`
+    /// disables rotation and leaves only the reactive reconnect path.
+    rotate: Option<Duration>,
 }
 
 pub fn run(global: &GlobalFlags, a: WatchArgs) -> Result<()> {
@@ -276,6 +304,7 @@ pub fn run(global: &GlobalFlags, a: WatchArgs) -> Result<()> {
             },
         }),
         limits: a.limits,
+        rotate: (a.session_rotate > 0).then(|| Duration::from_secs(a.session_rotate)),
     };
     watch(global, plan)
 }
@@ -550,6 +579,11 @@ struct Stream<W: Write> {
     /// running. A new session does not reset it, so silence accumulates across
     /// reconnects.
     last_event: Instant,
+    /// Keys of recently emitted events, oldest first. Session rotation overlaps
+    /// the old and new subscription, so one write can arrive on both; the second
+    /// copy is dropped here. Keyed on `sys_id|operation|sys_mod_count`, so a
+    /// genuine re-write — which increments `sys_mod_count` — never matches.
+    recent: std::collections::VecDeque<(String, Instant)>,
 }
 
 impl<W: Write> Stream<W> {
@@ -559,7 +593,31 @@ impl<W: Write> Stream<W> {
             max_events,
             emitted: 0,
             last_event: Instant::now(),
+            recent: std::collections::VecDeque::new(),
         }
+    }
+
+    /// Whether this raw event was already emitted (the rotation seam), recording
+    /// it if not. An event with no `sys_id` cannot be keyed and is never treated
+    /// as a duplicate — dropping an unidentifiable event is worse than repeating
+    /// one.
+    fn duplicate(&mut self, data: &Value) -> bool {
+        let Some(key) = dedup_key(data) else {
+            return false;
+        };
+        let now = Instant::now();
+        while self
+            .recent
+            .front()
+            .is_some_and(|(_, t)| now.duration_since(*t) > DEDUP_TTL)
+        {
+            self.recent.pop_front();
+        }
+        if self.recent.iter().any(|(k, _)| *k == key) {
+            return true;
+        }
+        self.recent.push_back((key, now));
+        false
     }
 
     /// Emit an event. Returns true once `--max-events` is satisfied.
@@ -612,6 +670,24 @@ impl<W: Write> Stream<W> {
     }
 }
 
+/// The identity of one write, as its event reports it. `sys_mod_count` is one
+/// of the five audit columns every record event carries, and it increments per
+/// write — so two events with the same key are the same write seen twice, not
+/// two writes. A delete carries no record, so its key is `sys_id|delete|`; a
+/// record cannot be deleted twice.
+fn dedup_key(data: &Value) -> Option<String> {
+    let sys_id = data.get("sys_id").and_then(Value::as_str)?;
+    let operation = data.get("operation").and_then(Value::as_str).unwrap_or("");
+    let mod_count = data
+        .pointer("/record/sys_mod_count/value")
+        .map(|v| match v {
+            Value::String(s) => s.clone(),
+            other => other.to_string(),
+        })
+        .unwrap_or_default();
+    Some(format!("{sys_id}|{operation}|{mod_count}"))
+}
+
 /// One socket lifetime: open a link, subscribe, pump until a limit is reached or
 /// the connection breaks.
 ///
@@ -650,18 +726,119 @@ fn session<W: Write, L: Link, C: FnMut() -> Result<L>>(
     // Every post-subscribe exit disconnects, the failed announcement included:
     // `sn watch … | head -2` closes stdout mid-marker, and returning straight
     // out of here would abandon a live subscription without /meta/disconnect.
-    let result = announced.and_then(|()| pump(&mut link, ctx, stream));
+    let result = announced.and_then(|()| pump_rotating(&mut link, ctx, connect, stream));
     link.disconnect();
     result
 }
 
-fn pump<W: Write, L: Link>(link: &mut L, ctx: &Ctx<'_>, stream: &mut Stream<W>) -> Result<()> {
+/// Why [`pump`] surfaced without an error.
+enum PumpEnd {
+    /// A limit was reached or the caller asked to stop.
+    Stopped,
+    /// The rotation deadline passed; time to build a replacement session.
+    Rotate,
+}
+
+/// Pump one link, replacing it on schedule so the instance's session reaper
+/// never catches a live watch.
+///
+/// This is make-before-break: the replacement is connected *and subscribed*
+/// before the old session is touched, so at every instant at least one live
+/// subscription exists and a rotation opens no gap — no marker, no idle-clock
+/// forgiveness, nothing on stdout. The old session keeps buffering while the
+/// replacement is built; [`drain`] empties it before it is dropped, and the
+/// seam — where one write arrives on both sessions — is closed by
+/// [`Stream::duplicate`].
+///
+/// A rotation that cannot build its replacement is not an error: the current
+/// session is still healthy, so keep pumping it and retry shortly
+/// ([`ROTATE_RETRY`]). If the reaper wins that race the session dies, and the
+/// supervisor's reactive path — reconnect, backoff, gap marker — takes over,
+/// which is exactly the degraded behavior the marker exists to report.
+fn pump_rotating<W: Write, L: Link, C: FnMut() -> Result<L>>(
+    link: &mut L,
+    ctx: &Ctx<'_>,
+    connect: &mut C,
+    stream: &mut Stream<W>,
+) -> Result<()> {
+    let mut rotate_at = ctx.plan.rotate.map(|d| Instant::now() + d);
+    loop {
+        match pump(link, ctx, stream, rotate_at)? {
+            PumpEnd::Stopped => return Ok(()),
+            PumpEnd::Rotate => match replacement(ctx, connect) {
+                Ok(fresh) => {
+                    let done = drain(link, ctx, stream)?;
+                    link.disconnect();
+                    *link = fresh;
+                    rotate_at = ctx.plan.rotate.map(|d| Instant::now() + d);
+                    log_note("amb: rotated to a fresh session");
+                    if done {
+                        return Ok(());
+                    }
+                }
+                Err(e) => {
+                    log_note(&format!(
+                        "amb: session rotation failed ({e}); keeping the current session"
+                    ));
+                    rotate_at = Some(Instant::now() + ROTATE_RETRY);
+                }
+            },
+        }
+    }
+}
+
+/// A connected, subscribed successor for the current session.
+fn replacement<L: Link, C: FnMut() -> Result<L>>(ctx: &Ctx<'_>, connect: &mut C) -> Result<L> {
+    let mut fresh = connect()?;
+    fresh.subscribe(&ctx.plan.channel)?;
+    Ok(fresh)
+}
+
+/// Empty the old session's buffered frames before it is discarded. Returns
+/// whether `--max-events` was satisfied mid-drain.
+///
+/// A link error here is the old session dying under the drain — its remaining
+/// frames are gone, but the replacement has been subscribed since before the
+/// drain began, so the same writes are already flowing there and the seam dedup
+/// keeps the copies straight. Emit errors still propagate: a broken pipe is
+/// about this process's stdout, not the discarded socket.
+fn drain<W: Write, L: Link>(link: &mut L, ctx: &Ctx<'_>, stream: &mut Stream<W>) -> Result<bool> {
+    for _ in 0..DRAIN_POLLS {
+        let events = match link.poll(DRAIN_WAIT) {
+            Ok(events) if events.is_empty() => break,
+            Ok(events) => events,
+            Err(_) => break,
+        };
+        for event in events {
+            if !ctx.plan.filter.accepts(&event.data) {
+                continue;
+            }
+            if stream.duplicate(&event.data) {
+                continue;
+            }
+            if stream.event(&shape(event, ctx.client, ctx.plan.hydrate.as_ref()))? {
+                return Ok(true);
+            }
+        }
+    }
+    Ok(false)
+}
+
+fn pump<W: Write, L: Link>(
+    link: &mut L,
+    ctx: &Ctx<'_>,
+    stream: &mut Stream<W>,
+    rotate_at: Option<Instant>,
+) -> Result<PumpEnd> {
     loop {
         if ctx.stop.load(Ordering::SeqCst) || past(ctx.deadline) {
-            return Ok(());
+            return Ok(PumpEnd::Stopped);
         }
         if stream.idle_expired(ctx.idle) {
-            return Ok(());
+            return Ok(PumpEnd::Stopped);
+        }
+        if past(rotate_at) {
+            return Ok(PumpEnd::Rotate);
         }
 
         // An empty batch means the poll simply expired — that is the tick that
@@ -674,8 +851,13 @@ fn pump<W: Write, L: Link>(link: &mut L, ctx: &Ctx<'_>, stream: &mut Stream<W>) 
             if !ctx.plan.filter.accepts(&event.data) {
                 continue;
             }
+            // Then the seam check, still before hydration: the second copy of a
+            // write must not cost a Table API call either.
+            if stream.duplicate(&event.data) {
+                continue;
+            }
             if stream.event(&shape(event, ctx.client, ctx.plan.hydrate.as_ref()))? {
-                return Ok(());
+                return Ok(PumpEnd::Stopped);
             }
         }
     }
@@ -817,6 +999,32 @@ mod tests {
     }
     fn delete() -> Value {
         json!({"operation": "delete", "action": "exit", "changes": []})
+    }
+
+    /// An event with the identity fields [`dedup_key`] reads.
+    fn keyed(op: &str, sys_id: &str, mod_count: u32) -> Value {
+        json!({"operation": op, "sys_id": sys_id, "changes": ["state"],
+        "record": {"sys_mod_count": {
+            "display_value": mod_count.to_string(),
+            "value": mod_count.to_string(),
+        }}})
+    }
+
+    #[test]
+    fn dedup_distinguishes_writes_by_mod_count_and_operation() {
+        let mut s = buffered(None);
+        assert!(!s.duplicate(&keyed("update", "a1", 7)), "first sighting");
+        assert!(s.duplicate(&keyed("update", "a1", 7)), "same write again");
+        assert!(!s.duplicate(&keyed("update", "a1", 8)), "a real re-write");
+        assert!(!s.duplicate(&keyed("delete", "a1", 8)), "another operation");
+    }
+
+    #[test]
+    fn an_event_without_a_sys_id_is_never_a_duplicate() {
+        // Dropping an unidentifiable event is worse than repeating one.
+        let mut s = buffered(None);
+        assert!(!s.duplicate(&update()));
+        assert!(!s.duplicate(&update()));
     }
 
     #[test]
@@ -1246,6 +1454,8 @@ mod tests {
         pause: Duration,
         /// How long the first connect takes — a slow session mint.
         connect_delay: Duration,
+        /// Preemptive rotation interval, as `Plan.rotate`.
+        rotate: Option<Duration>,
     }
 
     /// Drive `supervise` over the script, writing into `stream`.
@@ -1256,6 +1466,7 @@ mod tests {
             filter: Filter::default(),
             hydrate: None,
             limits: WatchLimits::default(),
+            rotate: script.rotate,
         };
         let client = unreachable_client();
         let stop = AtomicBool::new(false);
@@ -1328,6 +1539,95 @@ mod tests {
             2,
             "the replacement session resubscribed"
         );
+    }
+
+    #[test]
+    fn rotation_swaps_sessions_without_a_marker() {
+        // Make-before-break: the replacement subscribes, the old session is
+        // drained and dropped, and the stream carries no marker — nothing was
+        // lost, so there is no hole to announce.
+        let mut s = buffered(Some(2));
+        let (result, log) = play(
+            Script {
+                attempts: vec![
+                    Attempt::Opens(vec![
+                        Step::Deliver(vec![insert()]),
+                        Step::Quiet(Duration::from_millis(30)),
+                    ]),
+                    Attempt::Opens(vec![Step::Deliver(vec![update()])]),
+                ],
+                rotate: Some(Duration::from_millis(20)),
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        let out = lines(&s);
+        assert_eq!(out.len(), 2, "two events, no marker: {out:?}");
+        assert_eq!(out[0]["operation"], "insert");
+        assert_eq!(out[1]["operation"], "update");
+        assert_eq!(log.borrow().subscribes.len(), 2, "replacement subscribed");
+        assert_eq!(
+            log.borrow().disconnects,
+            2,
+            "the old session at rotation, the new one at exit"
+        );
+    }
+
+    #[test]
+    fn the_rotation_seam_emits_each_write_once() {
+        // During the overlap one write can arrive on both the old session (in
+        // the drain) and the replacement. Exactly one copy reaches the caller,
+        // and a genuine later write still gets through.
+        let mut s = buffered(Some(2));
+        let (result, _) = play(
+            Script {
+                attempts: vec![
+                    Attempt::Opens(vec![
+                        Step::Quiet(Duration::from_millis(30)),
+                        Step::Deliver(vec![keyed("update", "a1", 7)]),
+                    ]),
+                    Attempt::Opens(vec![Step::Deliver(vec![
+                        keyed("update", "a1", 7),
+                        keyed("update", "a1", 8),
+                    ])]),
+                ],
+                rotate: Some(Duration::from_millis(20)),
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        let out = lines(&s);
+        assert_eq!(out.len(), 2, "the seam duplicate is dropped: {out:?}");
+        assert_eq!(out[0]["record"]["sys_mod_count"]["value"], "7");
+        assert_eq!(out[1]["record"]["sys_mod_count"]["value"], "8");
+    }
+
+    #[test]
+    fn a_failed_rotation_keeps_the_current_session() {
+        // The current session is healthy; a replacement that cannot be built is
+        // retry-later, not an error and not a teardown.
+        let mut s = buffered(Some(1));
+        let (result, log) = play(
+            Script {
+                attempts: vec![
+                    Attempt::Opens(vec![
+                        Step::Quiet(Duration::from_millis(30)),
+                        Step::Deliver(vec![insert()]),
+                    ]),
+                    Attempt::ConnectFails,
+                ],
+                rotate: Some(Duration::from_millis(20)),
+                ..Default::default()
+            },
+            &mut s,
+        );
+        assert!(result.is_ok(), "{result:?}");
+        let out = lines(&s);
+        assert_eq!(out.len(), 1, "the old session kept delivering: {out:?}");
+        assert_eq!(out[0]["operation"], "insert");
+        assert_eq!(log.borrow().disconnects, 1, "only the session that lived");
     }
 
     #[test]

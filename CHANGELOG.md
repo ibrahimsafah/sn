@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+
+- `sn watch` no longer loses events to the instance's session reaper. The watcher replaces its session every 45 seconds (`--session-rotate <SECS>`, 0 disables) with a make-before-break handoff: the replacement subscribes before the old session disconnects, the old socket is drained, and the overlap is deduplicated. A routine reap opens no gap and writes no marker; markers now indicate genuine failures only.
+
 ## 0.12.1 (2026-08-13)
 
 ### Breaking

@@ -129,18 +129,13 @@ envelope is what you need.
 
 ```bash
 # Stream changes to matching records. Bound the stream, or it runs until you stop it.
-sn watch table incident --query "priority=1^active=true" --max-events 5
-sn watch table incident --sys-id <SYS_ID> --duration 60      # stop after 60s
-sn watch table incident --query "active=true" --idle-timeout 30   # stop after 30s of quiet
+sn watch incident --query "priority=1^active=true" --max-events 5
+sn watch incident --sys-id <SYS_ID> --duration 60           # stop after 60s
+sn watch incident --query "active=true" --idle-timeout 30   # stop after 30s of quiet
 
 # Narrow it down
-sn watch table incident --query "active=true" --operation insert          # only new records
-sn watch table incident --query "active=true" --on-change state,priority  # only these fields
-
-# Other channels
-sn watch count incident --query "active=true"   # how many records match
-sn watch activity <SYS_ID>                      # comments, work notes, field changes
-sn watch channel '/uxbannerannouncements'       # raw AMB channel (escape hatch)
+sn watch incident --query "active=true" --operation insert          # only new records
+sn watch incident --query "active=true" --on-change state,priority  # only these fields
 ```
 
 **An event carries the fields that changed, with their new values.** `record` holds every field named in `changes` as a `{display_value, value}` pair, plus a few `sys_*` audit columns. This is what you get by default, with no extra API call:
@@ -160,7 +155,6 @@ Worth knowing:
 
 - **`changes` includes derived fields.** Writing `urgency` also reports `priority`, because ServiceNow recomputes it.
 - **Inserts list every populated field** in `changes`, so an insert's `record` is the whole new row. **Deletes carry `changes: []`**, so `--on-change` never matches a delete — and no `record`, since there is nothing left to report (under `--hydrate` a delete emits `record: null` instead of attempting a doomed fetch).
-- **`sn watch count` reports a delta, not a total** (`{"count": "+1"}`). Seed from `sn aggregate <TABLE> --count --query <ENCODED_QUERY>` (same query as the watch) and accumulate.
 - Ctrl-C exits 0. Works with both basic and OAuth/SSO profiles.
 - `--insecure` and `--ca-cert` are honored. **Proxies are not supported**: a profile with a proxy configured exits 1 rather than connecting around it.
 
@@ -185,6 +179,13 @@ quiet table look identical.
   `jq 'select(.sn_watch == null)'` if you want events only.
 - **It is not an event**: it does not count against `--max-events` and does not reset the
   `--idle-timeout` clock.
+- **Markers are routine.** ServiceNow reaps a watcher's HTTP session every minute or two
+  regardless of traffic; the watcher detects the reap on its next poll, reconnects on a fresh
+  session, and writes a marker. A long watch therefore carries periodic small-`downtime_ms`
+  markers — expected, not a sign of trouble. One honest caveat: the reap precedes its detection
+  by up to one ~30s long-poll cycle, and that undetected window is not inside `downtime_ms` —
+  when completeness matters, reconcile from shortly *before* the reported window, not just
+  inside it.
 - **One marker per gap, not per attempt.** `downtime_ms` spans the whole outage however many
   reconnects it took; `attempt` is the ordinal of the one that succeeded. A clean run emits no
   marker at all.

@@ -33,12 +33,12 @@ fn err_of(out: &std::process::Output) -> Value {
 // ── argument validation (no network) ────────────────────────────────────────
 
 #[test]
-fn watch_table_requires_a_query_or_a_sys_id() {
+fn watch_requires_a_query_or_a_sys_id() {
     // Watching a whole table with no filter would be a firehose keyed off an
     // empty channel name; clap must demand a target.
     let tmp = profile_at("https://example.invalid");
     let out = sn_cmd(tmp.path())
-        .args(["watch", "table", "incident"])
+        .args(["watch", "incident"])
         .assert()
         .failure()
         .code(1);
@@ -50,12 +50,11 @@ fn watch_table_requires_a_query_or_a_sys_id() {
 }
 
 #[test]
-fn watch_table_rejects_query_and_sys_id_together() {
+fn watch_rejects_query_and_sys_id_together() {
     let tmp = profile_at("https://example.invalid");
     sn_cmd(tmp.path())
         .args([
             "watch",
-            "table",
             "incident",
             "--query",
             "active=true",
@@ -73,7 +72,6 @@ fn watch_rejects_an_unknown_operation() {
     sn_cmd(tmp.path())
         .args([
             "watch",
-            "table",
             "incident",
             "-q",
             "active=true",
@@ -94,7 +92,6 @@ fn fields_without_hydrate_is_a_usage_error() {
     let out = sn_cmd(tmp.path())
         .args([
             "watch",
-            "table",
             "incident",
             "-q",
             "active=true",
@@ -117,7 +114,6 @@ fn display_value_without_hydrate_is_a_usage_error() {
     sn_cmd(tmp.path())
         .args([
             "watch",
-            "table",
             "incident",
             "-q",
             "active=true",
@@ -135,7 +131,6 @@ fn hydrate_and_no_hydrate_together_is_a_usage_error() {
     sn_cmd(tmp.path())
         .args([
             "watch",
-            "table",
             "incident",
             "-q",
             "active=true",
@@ -156,7 +151,6 @@ fn no_hydrate_is_still_accepted_as_a_no_op() {
     sn_cmd(tmp.path())
         .args([
             "watch",
-            "table",
             "incident",
             "-q",
             "active=true",
@@ -177,7 +171,6 @@ fn watch_refuses_a_proxy_rather_than_silently_bypassing_it() {
     let out = sn_cmd(tmp.path())
         .args([
             "watch",
-            "table",
             "incident",
             "-q",
             "active=true",
@@ -214,7 +207,7 @@ async fn watch_surfaces_an_auth_failure_from_the_session_mint() {
     let tmp = profile_at(&server.uri());
     let out = tokio::task::spawn_blocking(move || {
         sn_cmd(tmp.path())
-            .args(["watch", "table", "incident", "-q", "active=true"])
+            .args(["watch", "incident", "-q", "active=true"])
             .assert()
             .failure()
             .code(4)
@@ -244,7 +237,7 @@ async fn watch_fails_when_the_instance_mints_no_session_cookie() {
     let tmp = profile_at(&server.uri());
     let out = tokio::task::spawn_blocking(move || {
         sn_cmd(tmp.path())
-            .args(["watch", "table", "incident", "-q", "active=true"])
+            .args(["watch", "incident", "-q", "active=true"])
             .assert()
             .failure()
             .code(4)
@@ -285,7 +278,7 @@ async fn watch_fails_fast_when_the_socket_never_connects() {
     let started = std::time::Instant::now();
     let out = tokio::task::spawn_blocking(move || {
         sn_cmd(tmp.path())
-            .args(["watch", "table", "incident", "-q", "active=true"])
+            .args(["watch", "incident", "-q", "active=true"])
             .assert()
             .failure()
             .code(3) // transport

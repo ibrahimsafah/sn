@@ -39,7 +39,7 @@ sn table list incident --query "active=true" --setlimit 5     # five open incide
 sn table incident <sys_id>                                    # one record
 sn schema columns incident --writable                         # what can I set?
 sn table create incident -F short_description="Disk full on prod-db-01"
-sn watch table incident --query "active=true"                 # stream changes, live
+sn watch incident --query "active=true"                       # stream changes, live
 ```
 
 Output is JSON, so everything pipes into `jq`; add `--output table` for a human-readable

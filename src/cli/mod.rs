@@ -76,10 +76,7 @@ pub use update_set::{
 };
 pub use user::UserSub;
 pub use variables::{VariablesGetArgs, VariablesSetArgs, VariablesSub};
-pub use watch::{
-    Operation, WatchActivityArgs, WatchChannelArgs, WatchCountArgs, WatchLimits, WatchSub,
-    WatchTableArgs,
-};
+pub use watch::{Operation, WatchArgs, WatchLimits};
 
 use clap::{CommandFactory, FromArgMatches, Parser, Subcommand, ValueEnum};
 
@@ -358,11 +355,8 @@ pub enum Command {
         #[command(subcommand)]
         sub: VariablesSub,
     },
-    /// Watch records change in real time (AMB websocket). Streams JSONL.
-    Watch {
-        #[command(subcommand)]
-        sub: WatchSub,
-    },
+    /// Watch records in a table change in real time (AMB websocket). Streams JSONL.
+    Watch(WatchArgs),
     /// Schema discovery.
     Schema {
         #[command(subcommand)]

@@ -34,7 +34,7 @@
 //!    checks it and raises an auth error, because the alternative is a client
 //!    that reports "connected" and then silently receives nothing forever.
 
-use crate::error::{Error, Result};
+use crate::error::{Error, Result, NO_HTTP_STATUS};
 use crate::observability::{log_body, log_request};
 use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
@@ -78,16 +78,6 @@ pub fn encode_filter(filter: &str) -> String {
 /// Channel carrying one event per matching record change.
 pub fn record_channel(table: &str, filter: &str) -> String {
     format!("/rw/default/{table}/{}", encode_filter(filter))
-}
-
-/// Channel carrying the *count* of matching records rather than the records.
-pub fn count_channel(table: &str, filter: &str) -> String {
-    format!("/rw/count2/{table}/{}", encode_filter(filter))
-}
-
-/// Channel carrying a record's activity stream (comments, work notes, changes).
-pub fn activity_channel(sys_id: &str) -> String {
-    format!("/activity/events/{sys_id}")
 }
 
 // ── TLS ─────────────────────────────────────────────────────────────────────
@@ -248,6 +238,9 @@ pub struct Amb {
     ws: WebSocket<MaybeTlsStream<TcpStream>>,
     client_id: String,
     next_id: u64,
+    /// A death verdict noticed mid-batch, held so the events sharing that frame
+    /// could be delivered first. The next [`Amb::poll`] reports it.
+    dying: Option<String>,
 }
 
 impl Amb {
@@ -310,6 +303,7 @@ impl Amb {
             ws,
             client_id: String::new(),
             next_id: 0,
+            dying: None,
         };
         amb.set_read_timeout(Some(connect_timeout))?;
         amb.handshake()?;
@@ -332,11 +326,7 @@ impl Amb {
         // handshake is also "successful" and also hands back a clientId. Only
         // this field distinguishes them, and only here — by /meta/subscribe the
         // failure has degraded into `404::message_deleted`.
-        let session = reply
-            .get("ext")
-            .and_then(|e| e.get("glide.session.status"))
-            .and_then(Value::as_str);
-        if let Some(status) = session {
+        if let Some(status) = session_status(&reply) {
             if status != SESSION_LOGGED_IN {
                 return Err(Error::Auth {
                     status: 401,
@@ -403,8 +393,10 @@ impl Amb {
                 .get("error")
                 .and_then(Value::as_str)
                 .unwrap_or("unknown error");
+            // The refusal is an in-band Bayeux reply; the only HTTP exchange
+            // here was the 101 upgrade, so there is no status to publish.
             return Err(Error::Api {
-                status: 400,
+                status: NO_HTTP_STATUS,
                 message: format!("amb subscribe to {channel} failed: {err}"),
                 detail: Some(
                     "check the table name and that the query is a valid encoded query".into(),
@@ -419,24 +411,30 @@ impl Amb {
     /// Wait up to `wait` for events. An empty vec means the poll simply expired
     /// — the caller uses that as its tick for deadlines and Ctrl-C.
     pub fn poll(&mut self, wait: Duration) -> Result<Vec<Event>> {
+        // A death noticed mid-batch last time: its frame's events have been
+        // delivered, so now the session's end can be reported.
+        if let Some(reason) = self.dying.take() {
+            return Err(Error::Transport(reason));
+        }
         self.set_read_timeout(Some(wait))?;
         let Some(batch) = self.read_batch()? else {
             return Ok(Vec::new());
         };
 
         let mut events = Vec::new();
+        let mut death: Option<String> = None;
         for msg in batch {
             let channel = msg.get("channel").and_then(Value::as_str).unwrap_or("");
             if channel == "/meta/connect" {
-                // The server can order a full re-handshake (session gone, node
-                // failed over). We cannot satisfy that in place — it needs fresh
-                // cookies — so surface it and let the supervisor rebuild.
-                if msg.pointer("/advice/reconnect").and_then(Value::as_str) == Some("handshake") {
-                    return Err(Error::Transport(
-                        "amb session expired; server requested re-handshake".into(),
-                    ));
+                // A condemned session must not be re-armed, but the batch must
+                // still be drained: a Bayeux frame legally carries events beside
+                // the verdict, and returning early would drop records the wire
+                // actually delivered.
+                if let Some(reason) = death_verdict(&msg) {
+                    death = Some(reason);
+                } else {
+                    self.rearm()?;
                 }
-                self.rearm()?;
             } else if !channel.starts_with("/meta/") && !channel.is_empty() {
                 if let Some(data) = msg.get("data") {
                     events.push(Event {
@@ -446,7 +444,14 @@ impl Amb {
                 }
             }
         }
-        Ok(events)
+        match death {
+            Some(reason) if events.is_empty() => Err(Error::Transport(reason)),
+            Some(reason) => {
+                self.dying = Some(reason);
+                Ok(events)
+            }
+            None => Ok(events),
+        }
     }
 
     /// Best-effort clean shutdown: tell the server to drop the client, then close.
@@ -486,6 +491,13 @@ impl Amb {
                     return Ok(msg.clone());
                 }
                 if msg.get("channel").and_then(Value::as_str) == Some("/meta/connect") {
+                    // A death verdict overtaking the awaited reply must not be
+                    // re-armed away: without this check a session reaped during
+                    // subscribe degrades into `404::message_deleted` — an error
+                    // that blames the caller's table name for a session problem.
+                    if let Some(reason) = death_verdict(msg) {
+                        return Err(Error::Transport(reason));
+                    }
                     rearm = true;
                 }
             }
@@ -540,6 +552,40 @@ impl Amb {
 /// report for a socket timeout, so both count.
 fn is_timeout(e: &std::io::Error) -> bool {
     matches!(e.kind(), ErrorKind::WouldBlock | ErrorKind::TimedOut)
+}
+
+/// The `ext["glide.session.status"]` a Bayeux reply carries, if any. The one
+/// place the server reports the backing HTTP session's health — checked at
+/// handshake (where a bad status means the cookies were rejected) and on every
+/// connect reply (where it means the session has since been reaped).
+fn session_status(msg: &Value) -> Option<&str> {
+    msg.get("ext")?.get("glide.session.status")?.as_str()
+}
+
+/// Whether a connect reply reports the backing HTTP session dead. A reply that
+/// carries no status is not a verdict — only an explicit non-logged-in value
+/// condemns the session, mirroring the handshake check.
+fn session_dead(msg: &Value) -> bool {
+    session_status(msg).is_some_and(|s| s != SESSION_LOGGED_IN)
+}
+
+/// Why a connect reply condemns the session, if it does. Both read loops use
+/// this before re-arming: the instance reaps a watcher's session mid-stream
+/// (~60-120s after mint, measured; neither AMB traffic nor HTTP touches prevent
+/// it), and a dead session still answers `successful: true` and still accepts
+/// re-arms — it just never delivers another event. Re-arming it would be the
+/// silent-zombie failure mode the handshake check exists to prevent, so the
+/// death surfaces as a recoverable drop and the supervisor reconnects on fresh
+/// cookies. The server can also order a full re-handshake (session gone, node
+/// failed over), which cannot be satisfied in place for the same reason.
+fn death_verdict(msg: &Value) -> Option<String> {
+    if session_dead(msg) {
+        return Some("amb session invalidated by the instance".into());
+    }
+    if msg.pointer("/advice/reconnect").and_then(Value::as_str) == Some("handshake") {
+        return Some("amb session expired; server requested re-handshake".into());
+    }
+    None
 }
 
 /// Derive `(ws_url, host, port, origin)` from a normalized instance base URL.
@@ -607,10 +653,54 @@ mod tests {
     }
 
     #[test]
-    fn channels_carry_type_and_table() {
+    fn record_channel_carries_table_and_encoded_query() {
         assert!(record_channel("incident", "priority=1").starts_with("/rw/default/incident/"));
-        assert!(count_channel("incident", "priority=1").starts_with("/rw/count2/incident/"));
-        assert_eq!(activity_channel("abc123"), "/activity/events/abc123");
+    }
+
+    #[test]
+    fn a_rehandshake_order_is_a_death_verdict() {
+        let msg = json!({
+            "channel": "/meta/connect",
+            "successful": false,
+            "advice": {"reconnect": "handshake"},
+        });
+        assert!(death_verdict(&msg).is_some());
+        assert!(death_verdict(&json!({"channel": "/meta/connect", "successful": true})).is_none());
+    }
+
+    #[test]
+    fn a_logged_in_connect_reply_is_not_a_death() {
+        let msg = json!({
+            "channel": "/meta/connect",
+            "successful": true,
+            "ext": {"glide.session.status": "session.logged.in"},
+        });
+        assert!(!session_dead(&msg));
+    }
+
+    #[test]
+    fn an_invalidated_connect_reply_is_a_death_despite_successful_true() {
+        // Captured live: the reaped session keeps answering `successful: true`.
+        let msg = json!({
+            "channel": "/meta/connect",
+            "successful": true,
+            "ext": {
+                "glide.amb.active": true,
+                "glide.session.status": "session.invalidated",
+                "glide.session.time.remaining.in.seconds": 0,
+            },
+        });
+        assert!(session_dead(&msg));
+    }
+
+    #[test]
+    fn a_reply_without_a_session_status_is_not_a_verdict() {
+        assert!(!session_dead(
+            &json!({"channel": "/meta/connect", "successful": true})
+        ));
+        assert!(!session_dead(
+            &json!({"channel": "/meta/connect", "ext": {}})
+        ));
     }
 
     #[test]

@@ -10,6 +10,7 @@ pub mod change;
 pub mod cmdb;
 pub mod completion;
 pub mod context;
+pub mod get_record;
 pub mod graphql;
 pub mod identify;
 pub mod import;
@@ -22,6 +23,7 @@ pub mod ping;
 pub mod profile;
 pub mod progress;
 pub mod raw;
+pub(crate) mod record_ref;
 pub mod schema;
 pub mod scores;
 pub mod table;
@@ -58,6 +60,7 @@ pub use cmdb::{
 };
 pub use completion::{CompletionArgs, Shell as CompletionShell};
 pub use context::{ContextSub, ContextTargetArgs};
+pub use get_record::GetRecordArgs;
 pub use graphql::GraphqlArgs;
 pub use identify::{IdentifyArgs, IdentifyEnhancedArgs, IdentifySub};
 pub use import::{ImportBulkArgs, ImportCreateArgs, ImportGetArgs, ImportSub};
@@ -124,9 +127,12 @@ pub fn parse() -> Result<Cli, clap::Error> {
 /// Rewrites of argv with a read verb inserted, most specific first. Empty when
 /// the shorthand does not apply.
 ///
-/// Exactly one of `get`/`list` can ever parse: `get` requires a second
-/// positional and `list` rejects one, so trying both in turn is a decision, not
-/// a guess.
+/// Which verb wins is a decision, not a guess, carried by the token's shape:
+/// a `:` marks a `table:id` record reference (a table name can never contain
+/// one), so only `get` is offered. A plain token tries `list` first — `list`
+/// rejects a second positional, so `sn table incident abc` falls through to
+/// `get`, while `sn table incident` stops at `list` before `get` (whose
+/// sys_id positional is optional for the reference form) could claim it.
 fn implied_verb_argv(
     argv: &[std::ffi::OsString],
     err: &clap::Error,
@@ -160,7 +166,12 @@ fn implied_verb_argv(
     else {
         return Vec::new();
     };
-    ["get", "list"]
+    let verbs: &[&str] = if token.contains(':') {
+        &["get"]
+    } else {
+        &["list", "get"]
+    };
+    verbs
         .iter()
         .map(|verb| {
             let mut rewritten = argv.to_vec();
@@ -356,6 +367,9 @@ pub enum Command {
         #[command(subcommand)]
         sub: TableSub,
     },
+    /// Get one record by reference — with its variables and journal entries
+    /// (`sn get table:sys_id`, `sn get incident:INC0010001`, `sn get INC0010001`).
+    Get(GetRecordArgs),
     /// Comments and work notes for one record, parsed into entries (`sn journal <TABLE> <SYS_ID>`).
     Journal(JournalArgs),
     /// Catalog variables on a record: read, and write with verification.

@@ -1,5 +1,6 @@
 use crate::body::{build_body, BodyInput};
 use crate::cli::kernel::{bool_opt, confirm_delete, connect, emit, write_response};
+use crate::cli::record_ref;
 use crate::cli::{BodyArgs, DisplayValueOpt, GlobalFlags, OutputMode, ADVANCED};
 use crate::error::{Error, Result};
 use crate::query::{DeleteQuery, GetQuery, ListQuery, WriteQuery};
@@ -85,10 +86,11 @@ pub struct TableListArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct TableGetArgs {
-    /// Table name (e.g. `incident`).
+    /// Table name (e.g. `incident`), or a combined `table:sys_id` /
+    /// `table:number` reference (e.g. `incident:INC0010001`).
     pub table: String,
-    /// sys_id of the record to fetch.
-    pub sys_id: String,
+    /// sys_id of the record to fetch. Omit when TABLE is a `table:id` reference.
+    pub sys_id: Option<String>,
     /// Comma-separated fields to return.
     #[arg(long, short = 'f', alias = "sysparm-fields")]
     pub fields: Option<String>,
@@ -144,10 +146,11 @@ pub struct TableCreateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct TableUpdateArgs {
-    /// Table name (e.g. `incident`).
+    /// Table name (e.g. `incident`), or a combined `table:sys_id` /
+    /// `table:number` reference (e.g. `incident:INC0010001`).
     pub table: String,
-    /// sys_id of the record to patch.
-    pub sys_id: String,
+    /// sys_id of the record to patch. Omit when TABLE is a `table:id` reference.
+    pub sys_id: Option<String>,
     #[command(flatten)]
     pub body: BodyArgs,
     /// Comma-separated fields to return on the updated record.
@@ -182,10 +185,11 @@ pub struct TableUpdateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct TableDeleteArgs {
-    /// Table name (e.g. `incident`).
+    /// Table name (e.g. `incident`), or a combined `table:sys_id` /
+    /// `table:number` reference (e.g. `incident:INC0010001`).
     pub table: String,
-    /// sys_id of the record to delete.
-    pub sys_id: String,
+    /// sys_id of the record to delete. Omit when TABLE is a `table:id` reference.
+    pub sys_id: Option<String>,
     /// Skip confirmation prompt (required for non-interactive use).
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -283,7 +287,9 @@ fn reject_unstreamable_output(mode: OutputMode, array: bool) -> Result<()> {
 }
 
 pub fn get(global: &GlobalFlags, args: TableGetArgs) -> Result<()> {
+    let r = record_ref::parse_pair(&args.table, args.sys_id.as_deref(), "table")?;
     let client = connect(global)?;
+    let sys_id = r.resolve(&client)?;
     let q = GetQuery {
         fields: args.fields,
         display_value: args.display_value.display_value.map(Into::into),
@@ -291,7 +297,7 @@ pub fn get(global: &GlobalFlags, args: TableGetArgs) -> Result<()> {
         view: args.view,
         query_no_domain: bool_opt(args.query_no_domain),
     };
-    let path = format!("/api/now/table/{}/{}", args.table, args.sys_id);
+    let path = format!("/api/now/table/{}/{}", r.table, sys_id);
     let resp = client.get(&path, &q.to_pairs())?;
     emit(global, resp)
 }
@@ -315,8 +321,10 @@ pub fn create(global: &GlobalFlags, args: TableCreateArgs) -> Result<()> {
 }
 
 pub fn update(global: &GlobalFlags, args: TableUpdateArgs) -> Result<()> {
+    let r = record_ref::parse_pair(&args.table, args.sys_id.as_deref(), "table")?;
     let body = require_body(args.body)?;
     let client = connect(global)?;
+    let sys_id = r.resolve(&client)?;
     let q = WriteQuery {
         fields: args.fields,
         display_value: args.display_value.display_value.map(Into::into),
@@ -326,7 +334,7 @@ pub fn update(global: &GlobalFlags, args: TableUpdateArgs) -> Result<()> {
         view: args.view,
         query_no_domain: bool_opt(args.query_no_domain),
     };
-    let path = format!("/api/now/table/{}/{}", args.table, args.sys_id);
+    let path = format!("/api/now/table/{}/{}", r.table, sys_id);
     let resp = client.patch(&path, &q.to_pairs(), &body)?;
     emit(global, resp)
 }
@@ -342,11 +350,16 @@ fn require_body(body: BodyArgs) -> Result<Value> {
 }
 
 pub fn delete(global: &GlobalFlags, args: TableDeleteArgs) -> Result<()> {
-    confirm_delete(args.yes, &format!("{}/{}", args.table, args.sys_id))?;
+    let r = record_ref::parse_pair(&args.table, args.sys_id.as_deref(), "table")?;
+    // The confirm names what the caller typed (a number ref renders as
+    // `table:number`): learning the sys_id would take a network call, and the
+    // gate must stay pure argv.
+    confirm_delete(args.yes, &r.to_string())?;
     let client = connect(global)?;
+    let sys_id = r.resolve(&client)?;
     let q = DeleteQuery {
         query_no_domain: bool_opt(args.query_no_domain),
     };
-    let path = format!("/api/now/table/{}/{}", args.table, args.sys_id);
+    let path = format!("/api/now/table/{}/{}", r.table, sys_id);
     client.delete(&path, &q.to_pairs())
 }

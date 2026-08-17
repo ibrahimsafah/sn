@@ -88,6 +88,7 @@ fn run(cli: Cli) -> Result<()> {
             TableSub::Update(args) => sn::cli::table::update(&global, args),
             TableSub::Delete(args) => sn::cli::table::delete(&global, args),
         },
+        Command::Get(args) => sn::cli::get_record::run(&global, args),
         Command::Journal(args) => sn::cli::journal::run(&global, args),
         Command::Variables { sub } => match sub {
             VariablesSub::Get(args) => sn::cli::variables::get(&global, args),

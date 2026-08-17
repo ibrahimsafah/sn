@@ -22,6 +22,7 @@
 
 use crate::cli::graphql::{errors_to_api_error, execute, graphql_errors};
 use crate::cli::kernel::{connect, write_response};
+use crate::cli::record_ref;
 use crate::cli::GlobalFlags;
 use crate::client::Client;
 use crate::error::{Error, Result};
@@ -31,10 +32,11 @@ use serde_json::{json, Value};
 
 #[derive(clap::Args, Debug)]
 pub struct JournalArgs {
-    /// Table the record lives in (e.g. incident).
+    /// Table the record lives in (e.g. `incident`), or a combined
+    /// `table:sys_id` / `table:number` reference (e.g. `incident:INC0010001`).
     pub table: String,
-    /// sys_id of the record.
-    pub sys_id: String,
+    /// sys_id of the record. Omit when TABLE is a `table:id` reference.
+    pub sys_id: Option<String>,
     /// Only customer-visible comments.
     #[arg(long, conflicts_with = "work_notes")]
     pub comments: bool,
@@ -69,7 +71,7 @@ pub enum JournalSource {
 /// the rendered label (and omitted when the label matches neither journal
 /// field), from the table source it is exact and `label` is absent.
 #[derive(Serialize, Debug, PartialEq)]
-struct Entry {
+pub(crate) struct Entry {
     created_on: String,
     author: String,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -80,10 +82,10 @@ struct Entry {
 }
 
 pub fn run(global: &GlobalFlags, args: JournalArgs) -> Result<()> {
-    validate_identifier(&args.table, "table")?;
-    validate_sys_id(&args.sys_id)?;
+    let r = record_ref::parse_pair(&args.table, args.sys_id.as_deref(), "table")?;
 
     let client = connect(global)?;
+    let sys_id = r.resolve(&client)?;
 
     let filter = if args.comments {
         Some("comments")
@@ -95,7 +97,7 @@ pub fn run(global: &GlobalFlags, args: JournalArgs) -> Result<()> {
 
     let out = match args.source {
         JournalSource::Record => {
-            let streams = fetch_record_streams(&client, &args.table, &args.sys_id, filter)?;
+            let streams = fetch_record_streams(&client, &r.table, &sys_id, filter)?;
             if args.raw {
                 let combined: Vec<String> = streams.into_iter().map(|(_, s)| s).collect();
                 Value::String(combined.join(""))
@@ -112,7 +114,7 @@ pub fn run(global: &GlobalFlags, args: JournalArgs) -> Result<()> {
             }
         }
         JournalSource::Table => {
-            let entries = fetch_table_rows(&client, &args.sys_id, filter, args.limit)?;
+            let entries = fetch_table_rows(&client, &sys_id, filter, args.limit)?;
             serde_json::to_value(entries).expect("entries serialize")
         }
     };
@@ -291,7 +293,7 @@ fn fetch_table_rows(
 }
 
 /// Whether the errors contain a FieldUndefined validation error naming `name`.
-fn undefined_field(errors: &[Value], name: &str) -> bool {
+pub(crate) fn undefined_field(errors: &[Value], name: &str) -> bool {
     let needle = format!("Field '{name}'");
     errors.iter().any(|e| {
         e.get("message")
@@ -308,7 +310,7 @@ fn undefined_field(errors: &[Value], name: &str) -> bool {
 /// blank lines dropped (the renderer separates entries with one). The
 /// timestamp is matched structurally — starts with a digit, contains `:` —
 /// not by format, because it is rendered in the caller's date format.
-fn parse_stream(stream: &str) -> Result<Vec<Entry>> {
+pub(crate) fn parse_stream(stream: &str) -> Result<Vec<Entry>> {
     let mut entries: Vec<Entry> = Vec::new();
     let mut current: Option<(String, String, String, Vec<String>)> = None;
 
@@ -387,7 +389,7 @@ fn element_for_label(label: &str) -> Option<String> {
 /// Newest first across merged streams. Only reorders when every timestamp is
 /// ISO-shaped (`YYYY-MM-DD …` sorts lexicographically); locale-formatted dates
 /// ("08/11/2026") do not sort as strings, so those keep stream order.
-fn sort_newest_first(entries: &mut [Entry]) {
+pub(crate) fn sort_newest_first(entries: &mut [Entry]) {
     let iso = |e: &Entry| {
         let b = e.created_on.as_bytes();
         b.len() > 10 && b[4] == b'-' && b[7] == b'-'

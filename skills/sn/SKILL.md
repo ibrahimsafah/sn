@@ -38,8 +38,10 @@ sn change list --type normal -q "assigned_two=x^state=-5" | jq -c '.[-1].__meta'
 ```
 
 **Trust the CLI's own defenses rather than working around them.** `sn variables set` refuses
-unknown names before writing, `sn cmdb` stringifies numeric attributes for you, and `sn ping`
-/ `sn user me` fail closed rather than naming a stranger. Those traps are already shut.
+unknown names before writing, `sn cmdb` stringifies numeric attributes for you, `sn ping`
+/ `sn user me` fail closed rather than naming a stranger, and a `table:number` record
+reference that cannot be resolved errors instead of matching an arbitrary row. Those traps
+are already shut.
 
 ## Shape traps — where the obvious jq returns nothing
 
@@ -53,6 +55,7 @@ Silent: `jq` prints empty and exits 0, so a wrong path reads as "no data".
 | `change nextstates` | a list of `{value,label}` | three keys: `available_states`, `state_label`, **`state_transitions`** (conditions + `transition_available`) |
 | `change list` | every element is a record | the **last** is `{"__meta": …}`, so `length` is off by one |
 | `cmdb get` | `.name` | **`.attributes.name`** — top level is only `attributes` + relations |
+| `sn get` | `.number` | **`.record.number`** — top level is `{table, sys_id, record, variables, journal}` |
 | `aggregate --group-by` | `.stats.groupby_fields` | top level becomes an **array**; `groupby_fields` is a **sibling** of `stats` |
 | `aggregate --sum-fields` | `.stats.sum` | **`.stats.sum.<field>`** — sum/avg/min/max nest per field |
 | any count | a number | a **string**: `"70"` |

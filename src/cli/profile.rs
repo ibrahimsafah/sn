@@ -36,6 +36,14 @@ pub enum ProfileSub {
         /// Profile to make default.
         name: String,
     },
+    /// Run the OAuth flow for the selected (already-configured) profile and cache tokens.
+    Login,
+    /// Discard the profile's cached OAuth tokens.
+    Logout,
+    /// Show the resolved auth method and OAuth token status for a profile.
+    Status,
+    /// Force an OAuth token refresh now.
+    Refresh,
 }
 
 #[derive(clap::Args, Debug)]
@@ -99,6 +107,10 @@ pub fn run(global: &GlobalFlags, sub: ProfileSub) -> Result<()> {
         ProfileSub::Show { name } => show(global, name),
         ProfileSub::Remove { name, yes } => remove(global, name, yes),
         ProfileSub::Use { name } => set_default(global, name),
+        ProfileSub::Login => crate::cli::auth::login(global),
+        ProfileSub::Logout => crate::cli::auth::logout(global),
+        ProfileSub::Status => crate::cli::auth::status(global),
+        ProfileSub::Refresh => crate::cli::auth::refresh(global),
     }
 }
 
@@ -711,7 +723,7 @@ fn add(global: &GlobalFlags, args: ProfileAddArgs) -> Result<()> {
     if needs_browser && !is_interactive(&args) && !args.no_verify {
         return Err(Error::Usage(format!(
             "the authorization_code grant cannot be verified without a browser; \
-             re-run with --no-verify, then run `sn auth login --profile {}`",
+             re-run with --no-verify, then run `sn profile login --profile {}`",
             input.name
         )));
     }
@@ -737,7 +749,7 @@ fn add(global: &GlobalFlags, args: ProfileAddArgs) -> Result<()> {
         out["grant"] = json!(input.grant.as_str());
         out["loggedIn"] = json!(!args.no_verify);
         if args.no_verify {
-            out["next"] = json!(format!("sn auth login --profile {}", input.name));
+            out["next"] = json!(format!("sn profile login --profile {}", input.name));
         }
     }
     if let Some(u) = user {

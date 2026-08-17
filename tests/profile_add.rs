@@ -525,7 +525,7 @@ fn add_oauth_authorization_code_refuses_when_it_cannot_open_a_browser() {
         .unwrap()
         .to_string();
     assert!(msg.contains("--no-verify"), "message was: {msg}");
-    assert!(msg.contains("sn auth login"), "message was: {msg}");
+    assert!(msg.contains("sn profile login"), "message was: {msg}");
     assert!(!load_config(tmp.path()).profiles.contains_key("sso"));
 }
 
@@ -553,7 +553,7 @@ fn add_oauth_authorization_code_saves_unverified_with_no_verify() {
     assert_eq!(v["verified"], false);
     assert_eq!(v["loggedIn"], false);
     // An OAuth profile with no tokens is useless until someone logs in; say so.
-    assert_eq!(v["next"], "sn auth login --profile sso");
+    assert_eq!(v["next"], "sn profile login --profile sso");
 
     let p = &load_config(tmp.path()).profiles["sso"];
     assert_eq!(p.auth, sn::config::AuthMethod::Oauth);

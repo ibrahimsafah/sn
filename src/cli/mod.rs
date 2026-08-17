@@ -41,7 +41,6 @@ pub use attachment::{
     AttachmentDeleteArgs, AttachmentDownloadArgs, AttachmentGetArgs, AttachmentListArgs,
     AttachmentSub, AttachmentUploadArgs,
 };
-pub use auth::AuthSub;
 pub use catalog::{
     CatalogCartEmptyArgs, CatalogCartItemArgs, CatalogCartUpdateArgs, CatalogCategoriesArgs,
     CatalogCategoryArgs, CatalogGetArgs, CatalogItemArgs, CatalogItemsArgs, CatalogListArgs,
@@ -352,12 +351,7 @@ pub enum OutputMode {
 pub enum Command {
     /// Create or update a profile interactively.
     Init(InitArgs),
-    /// Auth operations.
-    Auth {
-        #[command(subcommand)]
-        sub: AuthSub,
-    },
-    /// Manage profiles.
+    /// Manage profiles and their auth sessions.
     Profile {
         #[command(subcommand)]
         sub: ProfileSub,

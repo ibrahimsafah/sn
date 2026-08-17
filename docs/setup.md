@@ -119,7 +119,7 @@ selected yet, so `ci` needs `sn profile use ci` or an explicit `--profile ci`.
 ## OAuth / SSO
 
 Configure the profile with `sn init --auth oauth` (or `sn profile add --auth oauth`), then run the
-flow with `sn auth login`:
+flow with `sn profile login`:
 
 ```bash
 # Authorization-code + PKCE (default): a PUBLIC client — no secret needed or prompted for.
@@ -130,18 +130,18 @@ sn init --profile sso --auth oauth --instance acme.service-now.com --client-id <
 sn profile add svc --auth oauth --instance acme.service-now.com \
   --grant client_credentials --client-id <id> --client-secret-stdin < secret.txt
 
-sn --profile sso auth login          # run the OAuth flow, cache tokens
+sn --profile sso profile login       # run the OAuth flow, cache tokens
 ```
 
 The two grants differ in whether they can be set up headlessly. `client_credentials` mints a token
 without a browser, so `sn profile add` verifies it like any other credential. `authorization_code`
 **requires** a browser, so there is nothing for `sn profile add` to test on a machine that has none:
 it refuses rather than save an untested profile. Pass `--no-verify` to register it anyway, then have
-a human run `sn auth login`.
+a human run `sn profile login`.
 
 **One-time admin setup** (if the instance has no registry entry yet): **System OAuth → Application Registry → New → "Create an OAuth API endpoint for external clients"**; set the redirect URL to `http://localhost:8400/callback` — which must match `--redirect-uri` **exactly** — and copy the client ID. For the default authorization-code flow, enable **Public Client / PKCE required** so no secret is needed; only `client_credentials` needs the generated secret.
 
-After login, tokens refresh transparently. Manage the session with `sn auth status` (method + token expiry), `sn auth refresh`, and `sn auth logout`. The client ID and redirect URI live in `config.toml`; the secret and tokens in `credentials.toml` (both files are `0600`).
+After login, tokens refresh transparently. Manage the session with `sn profile status` (method + token expiry), `sn profile refresh`, and `sn profile logout`. The client ID and redirect URI live in `config.toml`; the secret and tokens in `credentials.toml` (both files are `0600`).
 
 Verify either auth method at any time with `sn ping`.
 

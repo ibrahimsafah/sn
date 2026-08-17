@@ -14,6 +14,7 @@
 
 ### Breaking
 
+- `sn auth` is merged into `sn profile`: `login`, `logout`, `status` and `refresh` are now `sn profile <verb>`. Flags and output are unchanged; the `auth` group is gone.
 - Introspect schema: the `sys_id` positional on the reference-taking commands is now optional, and `attachment upload --table` is no longer required — regenerate any cached agent/MCP schemas.
 - `table get/update/delete` now validate the table name and sys_id (lowercase identifier; sys_id charset) instead of passing arbitrary strings into the URL.
 

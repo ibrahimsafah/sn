@@ -27,7 +27,7 @@ use std::time::{Duration, Instant};
 /// in-flight request never races the expiry boundary.
 const REFRESH_SKEW_SECS: u64 = 60;
 
-/// How long `sn auth login` waits for the SSO redirect before giving up.
+/// How long `sn profile login` waits for the SSO redirect before giving up.
 const LOGIN_TIMEOUT: Duration = Duration::from_secs(300);
 
 const URL_SAFE: base64::engine::general_purpose::GeneralPurpose =
@@ -128,7 +128,7 @@ pub fn run_loopback(redirect_uri: &str, expected_state: &str) -> Result<String> 
 
     let listener = TcpListener::bind(("127.0.0.1", port)).map_err(|e| {
         Error::Config(format!(
-            "cannot bind loopback redirect on 127.0.0.1:{port}: {e}. Is another `sn auth login` running, or is the port taken?"
+            "cannot bind loopback redirect on 127.0.0.1:{port}: {e}. Is another `sn profile login` running, or is the port taken?"
         ))
     })?;
     listener
@@ -482,7 +482,7 @@ pub fn ensure_access_token(profile: &ResolvedProfile, timeout: Option<u64>) -> R
         Err(Error::Auth {
             status: 401,
             message: format!(
-                "no valid OAuth token for profile '{}'; run `sn auth login`",
+                "no valid OAuth token for profile '{}'; run `sn profile login`",
                 profile.name
             ),
             transaction_id: None,
@@ -511,7 +511,7 @@ fn refresh_lock_timeout(timeout: Option<u64>) -> Duration {
         .saturating_add(REFRESH_LOCK_SLACK)
 }
 
-/// Force a token refresh now (for `sn auth refresh`), persisting the result.
+/// Force a token refresh now (for `sn profile refresh`), persisting the result.
 ///
 /// Locked like [`ensure_access_token`] so it cannot race a refresh happening
 /// underneath it, but with no staleness re-check: "force" means force, and the
@@ -532,7 +532,7 @@ pub fn force_refresh(profile: &ResolvedProfile, timeout: Option<u64>) -> Result<
                 .ok_or_else(|| Error::Auth {
                     status: 401,
                     message: format!(
-                        "no refresh token for profile '{}'; run `sn auth login`",
+                        "no refresh token for profile '{}'; run `sn profile login`",
                         profile.name
                     ),
                     transaction_id: None,

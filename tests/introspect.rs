@@ -15,12 +15,17 @@ fn introspect_lists_all_subcommands() {
         .iter()
         .filter_map(|s| s["name"].as_str().map(String::from))
         .collect();
-    for expected in ["init", "auth", "profile", "table", "schema", "introspect"] {
+    for expected in ["init", "profile", "table", "schema", "introspect"] {
         assert!(
             names.iter().any(|n| n == expected),
             "missing subcommand {expected}"
         );
     }
+    // The auth group was merged into `profile`; the session verbs live there now.
+    assert!(
+        !names.iter().any(|n| n == "auth"),
+        "the removed `auth` group reappeared at the top level"
+    );
 }
 
 #[test]

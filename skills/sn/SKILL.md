@@ -89,7 +89,7 @@ get labels — and dates localized to the caller's timezone. A localized date fe
 - **Pipe secrets** (`--password-stdin`, `--client-secret-stdin`); argv is visible to `ps`.
 - **Prefer `sn profile add` over `sn init`** — it emits JSON, never prompts off a TTY, and
   leaves `default_profile` alone.
-- **`authorization_code` OAuth is not agent-safe** — `sn auth login` opens a browser and blocks
+- **`authorization_code` OAuth is not agent-safe** — `sn profile login` opens a browser and blocks
   on a human. `client_credentials` is headless. Data commands never open a browser.
 - **Journal has no write verb**: add a note with
   `sn table update incident <sys_id> --field work_notes="..."`.

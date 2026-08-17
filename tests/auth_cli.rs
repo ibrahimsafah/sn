@@ -1,4 +1,4 @@
-//! End-to-end CLI tests for the `sn auth` OAuth commands, driving the compiled
+//! End-to-end CLI tests for the `sn profile` OAuth session commands, driving the compiled
 //! binary with `assert_cmd`. Each invocation gets its own config dir (set
 //! per-process via `SN_CONFIG_DIR`, so no global env mutation and no `serial`
 //! needed) — cross-platform, no XDG/Linux gating required.
@@ -26,7 +26,7 @@ fn auth_status_reports_oauth_profile() {
     );
 
     let out = sn_cmd(tmp.path())
-        .args(["--profile", "cli", "auth", "status"])
+        .args(["--profile", "cli", "profile", "status"])
         .assert()
         .success();
     let v: Value = serde_json::from_slice(&out.get_output().stdout).unwrap();
@@ -49,7 +49,7 @@ fn auth_login_rejects_basic_profile() {
     );
 
     let out = sn_cmd(tmp.path())
-        .args(["--profile", "basic", "auth", "login"])
+        .args(["--profile", "basic", "profile", "login"])
         .assert()
         .failure()
         .code(1);
@@ -70,7 +70,7 @@ fn auth_logout_clears_tokens() {
     );
 
     let out = sn_cmd(tmp.path())
-        .args(["--profile", "cli", "auth", "logout"])
+        .args(["--profile", "cli", "profile", "logout"])
         .assert()
         .success();
 
@@ -90,7 +90,7 @@ fn auth_logout_clears_tokens() {
 }
 
 #[test]
-fn auth_test_subcommand_is_gone() {
+fn auth_group_is_gone() {
     let tmp = write_profiles(
         "basic",
         &[ProfileSpec {
@@ -101,12 +101,18 @@ fn auth_test_subcommand_is_gone() {
         }],
     );
 
-    // `auth test` was folded into `sn ping`; it must now be a usage error.
-    sn_cmd(tmp.path())
-        .args(["--profile", "basic", "auth", "test"])
+    // The `auth` group was merged into `sn profile`; the old spelling must be a
+    // usage error, not a silent alias.
+    let out = sn_cmd(tmp.path())
+        .args(["--profile", "basic", "auth", "login"])
         .assert()
         .failure()
         .code(1);
+    let stderr = String::from_utf8_lossy(&out.get_output().stderr);
+    assert!(
+        stderr.contains("unrecognized subcommand"),
+        "expected unrecognized subcommand, got: {stderr}"
+    );
 }
 
 #[tokio::test(flavor = "current_thread")]
@@ -129,7 +135,7 @@ async fn auth_refresh_rotates_and_persists_token() {
 
     tokio::task::spawn_blocking(move || {
         let out = sn_cmd(&dir)
-            .args(["--profile", "cli", "--timeout", "30", "auth", "refresh"])
+            .args(["--profile", "cli", "--timeout", "30", "profile", "refresh"])
             .assert()
             .success();
 

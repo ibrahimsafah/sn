@@ -221,7 +221,7 @@ fn a_write_replaces_the_file_instead_of_truncating_it_in_place() {
 #[test]
 fn separate_processes_do_not_clobber_each_other() {
     // The in-process tests share a thread-local re-entrancy record; only separate
-    // processes prove the lock is really held in the filesystem. `sn auth logout`
+    // processes prove the lock is really held in the filesystem. `sn profile logout`
     // is the smallest command that does a full read-modify-write of
     // credentials.toml and needs no network, so N of them racing on one config
     // directory is the honest cross-process test: each must clear exactly its own
@@ -233,7 +233,7 @@ fn separate_processes_do_not_clobber_each_other() {
     let children: Vec<_> = (0..WRITERS)
         .map(|i| {
             let mut cmd = std::process::Command::new(&bin);
-            cmd.arg("auth")
+            cmd.arg("profile")
                 .arg("logout")
                 .arg("--profile")
                 .arg(format!("p{i}"))
@@ -241,14 +241,14 @@ fn separate_processes_do_not_clobber_each_other() {
                 .env_remove("XDG_CONFIG_HOME")
                 .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped());
-            cmd.spawn().expect("spawn sn auth logout")
+            cmd.spawn().expect("spawn sn profile logout")
         })
         .collect();
     for (i, child) in children.into_iter().enumerate() {
         let out = child.wait_with_output().unwrap();
         assert!(
             out.status.success(),
-            "sn auth logout p{i} exited {:?}\nstderr: {}",
+            "sn profile logout p{i} exited {:?}\nstderr: {}",
             out.status.code(),
             String::from_utf8_lossy(&out.stderr).trim()
         );
@@ -484,7 +484,7 @@ fn seed_oauth_profiles(dir: &Path, count: usize) {
 /// once (returning a new access token *and* a new `RT1`), and every later
 /// presentation of it — i.e. a second process that read the same cached
 /// credentials — gets the 401 a spent grant deserves. `sn` maps that to exit 4,
-/// "run `sn auth login`", moments after a perfectly valid token was minted.
+/// "run `sn profile login`", moments after a perfectly valid token was minted.
 ///
 /// Three invocations start together on one expired token. With the read →
 /// refresh → write sequence held under the config lock and the staleness check

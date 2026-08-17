@@ -76,7 +76,7 @@ impl OAuthGrant {
     }
 
     /// The wire/TOML spelling, matching the serde and clap `snake_case`
-    /// renames above — what `sn auth`/`sn profile` report as `grant`.
+    /// renames above — what `sn profile status`/`show` report as `grant`.
     pub fn as_str(self) -> &'static str {
         match self {
             OAuthGrant::AuthorizationCode => "authorization_code",
@@ -975,7 +975,7 @@ pub fn load_oauth_tokens(profile_name: &str) -> Result<Option<TokenSet>> {
         .and_then(|p| p.oauth_tokens.clone()))
 }
 
-/// Drop any cached OAuth tokens for `profile_name` (used by `sn auth logout`).
+/// Drop any cached OAuth tokens for `profile_name` (used by `sn profile logout`).
 pub fn clear_oauth_tokens(profile_name: &str) -> Result<()> {
     update_credentials_at(&credentials_path()?, |creds| {
         if let Some(p) = creds.profiles.get_mut(profile_name) {

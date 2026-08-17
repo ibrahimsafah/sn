@@ -448,7 +448,8 @@ sn table list incident --query "sys_created_on>2026-08-01" --display-value false
 ```
 
 The default applies to `table`, `change`, `aggregate`, and `scores`. `sn watch`
-is unaffected — there `--display-value` only narrows a `--hydrate` fetch.
+has no such flag — an event's `record` already carries each field as a
+`{display_value, value}` pair.
 
 ### Pagination & bulk processing
 

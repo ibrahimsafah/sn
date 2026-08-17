@@ -3,26 +3,28 @@
 //! The protocol itself lives in [`crate::amb`]. This module is the policy layer:
 //! it turns the arguments into a channel, supervises the socket (reconnect with
 //! backoff), enforces the termination limits that make an infinite stream usable
-//! from a script, filters events, and hydrates the survivors.
+//! from a script, and filters events.
 //!
-//! ## What an event carries, and why `--hydrate` exists
+//! ## What an event carries
 //!
 //! An AMB event carries values. Its `record` holds every field named in `changes`
 //! — with the new value, as a `{display_value, value}` pair — plus five `sys_*`
 //! audit columns (`sys_created_by/on`, `sys_updated_by/on`, `sys_mod_count`). On
 //! an insert that is the whole populated row, since `changes` then lists every
-//! field. This is what the stream emits, unchanged, by default.
+//! field. This is what the stream emits, unchanged.
 //!
 //! What an event does *not* carry is any field that did not change. A watch on
 //! `state` that also wants `number` or `assigned_to` gets neither, because they
-//! were not written. `--hydrate` opts into one Table API read per event, whose
-//! result *replaces* `record` with the whole row. It costs an API call per event,
-//! and note the row it fetches is the row as of the fetch, not as of the event:
-//! a record written twice in quick succession can hydrate the first event with
-//! the second event's values. The event's own `record` has no such skew.
-//!
-//! Until 0.10.0 hydration was the default, on the false premise that events carry
-//! only `sys_*` columns.
+//! were not written — read them explicitly (`sn table get <table> <sys_id>
+//! --fields …`), which keeps the extra API call and its timing visible at the
+//! call site. A `--hydrate` flag used to hide that read behind the stream (one
+//! Table API GET per event, *replacing* `record` with the whole row); it was
+//! removed in 0.13.0 because it traded a correct answer for a wrong one — a
+//! fetched row is the row as of the fetch, so a record written twice in quick
+//! succession hydrated the first event with the second write's values, and
+//! nothing said so. The flag itself was a survivor of the pre-0.10.0 false
+//! premise that events carry only `sys_*` columns (hydration was the *default*
+//! until checking the wire disproved that).
 //!
 //! ## Why filtering is client-side
 //!
@@ -84,14 +86,11 @@
 
 use crate::amb::{self, Amb, Event};
 use crate::cli::kernel::{build_client, build_profile};
-use crate::cli::DisplayValueArg;
 use crate::cli::GlobalFlags;
-use crate::client::Client;
 use crate::config::ResolvedProfile;
 use crate::error::{Error, Result};
 use crate::observability::log_note;
 use crate::output::write_jsonl_line;
-use crate::query::GetQuery;
 use clap::ValueEnum;
 use serde_json::{json, Value};
 use std::io::{self, Write};
@@ -179,16 +178,13 @@ impl Operation {
 }
 
 #[derive(clap::Args, Debug)]
-#[command(group = clap::ArgGroup::new("target").required(true).args(["query", "sys_id"]))]
 pub struct WatchArgs {
     /// Table name (e.g. `incident`).
     pub table: String,
-    /// Encoded query to watch, e.g. `priority=1^active=true`.
+    /// Encoded query to watch, e.g. `priority=1^active=true` — or
+    /// `sys_id=<SYS_ID>` for a single record.
     #[arg(long, short = 'q', alias = "sysparm-query")]
-    pub query: Option<String>,
-    /// Watch a single record. Shorthand for `--query sys_id=<SYS_ID>`.
-    #[arg(long)]
-    pub sys_id: Option<String>,
+    pub query: String,
     /// Only emit these operations, e.g. `--operation insert`. Repeatable. Default: all.
     #[arg(long, value_enum, value_delimiter = ',', value_name = "OP")]
     pub operation: Vec<Operation>,
@@ -200,42 +196,18 @@ pub struct WatchArgs {
         value_name = "FIELDS"
     )]
     pub on_change: Vec<String>,
-    /// Fetch the whole record for each event (one Table API read per event).
-    /// Without it, `record` is the event's own: the fields that changed, with
-    /// their new values.
-    #[arg(long)]
-    pub hydrate: bool,
-    /// Comma-separated fields to fetch. Requires `--hydrate`.
-    #[arg(long, short = 'f', alias = "sysparm-fields", requires = "hydrate")]
-    pub fields: Option<String>,
-    /// Resolve reference/choice fields: false (default), true, or all. Requires `--hydrate`.
-    #[arg(
-        long,
-        alias = "sysparm-display-value",
-        value_enum,
-        requires = "hydrate"
-    )]
-    pub display_value: Option<DisplayValueArg>,
     /// Replace the session every N seconds, before the instance can reap it
     /// (measured floor ~60s). The replacement subscribes before the old session
     /// disconnects, so rotation opens no gap. 0 disables rotation.
     #[arg(long, value_name = "SECS", default_value_t = 45)]
     pub session_rotate: u64,
-    /// Deprecated: not hydrating is now the default. Accepted as a no-op so
-    /// scripts written against 0.9.1 keep working — they already ask for what
-    /// they now get.
-    #[arg(long, hide = true, conflicts_with = "hydrate")]
+    /// Deprecated: events are never hydrated (`--hydrate` was removed in
+    /// 0.13.0). Accepted as a no-op so scripts written against 0.9.1 keep
+    /// working — they already ask for what they now get.
+    #[arg(long, hide = true)]
     pub no_hydrate: bool,
     #[command(flatten)]
     pub limits: WatchLimits,
-}
-
-/// What to fetch when an event names a record.
-struct Hydrate {
-    /// Fallback table; an event's own `table_name` wins when present, so a watch
-    /// on a base table still hydrates from the row's actual class.
-    table: String,
-    query: GetQuery,
 }
 
 /// Which events are worth emitting.
@@ -283,12 +255,11 @@ impl Filter {
     }
 }
 
-/// A resolved watch: the channel to subscribe to, what to keep, whether to
-/// hydrate, and when to stop.
+/// A resolved watch: the channel to subscribe to, what to keep, and when to
+/// stop.
 struct Plan {
     channel: String,
     filter: Filter,
-    hydrate: Option<Hydrate>,
     limits: WatchLimits,
     /// Replace the session this often, before the instance's reaper can. `None`
     /// disables rotation and leaves only the reactive reconnect path.
@@ -296,26 +267,12 @@ struct Plan {
 }
 
 pub fn run(global: &GlobalFlags, a: WatchArgs) -> Result<()> {
-    // --sys-id is sugar for the filter the UI itself uses.
-    let filter = match (&a.query, &a.sys_id) {
-        (Some(q), _) => q.clone(),
-        (None, Some(id)) => format!("sys_id={id}"),
-        (None, None) => unreachable!("clap ArgGroup requires one"),
-    };
     let plan = Plan {
-        channel: amb::record_channel(&a.table, &filter),
+        channel: amb::record_channel(&a.table, &a.query),
         filter: Filter {
             operations: a.operation,
             on_change: a.on_change,
         },
-        hydrate: a.hydrate.then(|| Hydrate {
-            table: a.table.clone(),
-            query: GetQuery {
-                fields: a.fields.clone(),
-                display_value: a.display_value.map(Into::into),
-                ..Default::default()
-            },
-        }),
         limits: a.limits,
         rotate: (a.session_rotate > 0).then(|| Duration::from_secs(a.session_rotate)),
     };
@@ -361,7 +318,6 @@ fn watch(global: &GlobalFlags, plan: Plan) -> Result<()> {
     let mut wait = |d: Duration| sleep_interruptibly(d, &stop, deadline);
 
     let ctx = Ctx {
-        client: &client,
         plan: &plan,
         stop: &stop,
         deadline,
@@ -373,8 +329,6 @@ fn watch(global: &GlobalFlags, plan: Plan) -> Result<()> {
 /// Everything a session needs that outlives it. Passed as one borrow so the
 /// session functions stay readable as the supervisor grows.
 struct Ctx<'a> {
-    /// Only used to hydrate; the socket has its own authentication (cookies).
-    client: &'a Client,
     plan: &'a Plan,
     stop: &'a AtomicBool,
     deadline: Option<Instant>,
@@ -862,9 +816,8 @@ fn replacement<L: Link, C: FnMut() -> Result<L>>(ctx: &Ctx<'_>, connect: &mut C)
 fn drain<W: Write, L: Link>(link: &mut L, ctx: &Ctx<'_>, stream: &mut Stream<W>) -> Result<bool> {
     let mut quiet = 0usize;
     for _ in 0..DRAIN_POLLS {
-        // The drain must stay as interruptible as the pump: with --hydrate a
-        // burst costs one blocking Table API call per event, and a Ctrl-C that
-        // waited for all of them would read as a hang.
+        // The drain must stay as interruptible as the pump: a Ctrl-C that
+        // waited out a burst of buffered frames would read as a hang.
         if ctx.stop.load(Ordering::SeqCst) || past(ctx.deadline) {
             return Ok(true);
         }
@@ -894,10 +847,10 @@ fn drain<W: Write, L: Link>(link: &mut L, ctx: &Ctx<'_>, stream: &mut Stream<W>)
 ///
 /// The order here is the invariant, and it lives in this function rather than
 /// at its call sites: the filter first, so a discarded event costs nothing (no
-/// hydration call, no `--max-events` spend, no idle-clock reset — otherwise
-/// `--operation insert --idle-timeout 30` would be held open indefinitely by
-/// updates the caller said it did not want); the seam check second, still
-/// before hydration, so a duplicate costs no Table API call either.
+/// `--max-events` spend, no idle-clock reset — otherwise `--operation insert
+/// --idle-timeout 30` would be held open indefinitely by updates the caller
+/// said it did not want); the seam check second, so a rotation's duplicate
+/// costs nothing either.
 fn deliver<W: Write>(events: Vec<Event>, ctx: &Ctx<'_>, stream: &mut Stream<W>) -> Result<bool> {
     for event in events {
         if !ctx.plan.filter.accepts(&event.data) {
@@ -906,7 +859,7 @@ fn deliver<W: Write>(events: Vec<Event>, ctx: &Ctx<'_>, stream: &mut Stream<W>) 
         if stream.duplicate(&event.data) {
             continue;
         }
-        if stream.event(&shape(event, ctx.client, ctx.plan.hydrate.as_ref()))? {
+        if stream.event(&event.data)? {
             return Ok(true);
         }
     }
@@ -935,67 +888,6 @@ fn pump<W: Write, L: Link>(
         if deliver(link.poll(TICK)?, ctx, stream)? {
             return Ok(PumpEnd::Stopped);
         }
-    }
-}
-
-/// Turn a raw AMB event into the record the caller actually wants.
-///
-/// With no `Hydrate` the event passes through untouched, which is the default:
-/// its `record` is already the changed fields with their new values. When
-/// hydrating, the fetched row *replaces* that record rather than merging with it.
-///
-/// Hydration failure is never fatal: a record can be deleted, or lose its ACL,
-/// between the event firing and the fetch landing. Losing one record's detail
-/// must not take down a stream the caller is relying on.
-fn shape(event: Event, client: &Client, hydrate: Option<&Hydrate>) -> Value {
-    let mut data = event.data;
-    let (Some(h), Some(obj)) = (hydrate, data.as_object_mut()) else {
-        return data;
-    };
-
-    // A deleted record cannot be fetched; say so rather than reporting an error.
-    if obj.get("operation").and_then(Value::as_str) == Some("delete") {
-        obj.insert("record".into(), Value::Null);
-        return data;
-    }
-
-    let Some(sys_id) = obj.get("sys_id").and_then(Value::as_str).map(str::to_owned) else {
-        return data;
-    };
-    let table = obj
-        .get("table_name")
-        .and_then(Value::as_str)
-        .unwrap_or(&h.table)
-        .to_owned();
-
-    match client.get(
-        &format!("/api/now/table/{table}/{sys_id}"),
-        &h.query.to_pairs(),
-    ) {
-        Ok(v) => {
-            obj.insert("record".into(), take_result(v));
-        }
-        Err(e) => {
-            obj.insert("record".into(), Value::Null);
-            obj.insert("hydrate_error".into(), json!(e.to_string()));
-        }
-    }
-    data
-}
-
-/// Unwrap a `{"result": …}` envelope by moving the subtree out.
-///
-/// Every other command unwraps once per invocation; hydration does it once per
-/// *event*, for the lifetime of the stream. Cloning the subtree out of a value
-/// that is about to be dropped (`v.get("result").cloned().unwrap_or(v)`) copies
-/// the whole record on every event for nothing.
-fn take_result(v: Value) -> Value {
-    match v {
-        Value::Object(mut m) => match m.remove("result") {
-            Some(r) => r,
-            None => Value::Object(m),
-        },
-        other => other,
     }
 }
 
@@ -1567,14 +1459,11 @@ mod tests {
         let plan = Plan {
             channel: CHANNEL.to_string(),
             filter: Filter::default(),
-            hydrate: None,
             limits: WatchLimits::default(),
             rotate: script.rotate,
         };
-        let client = unreachable_client();
         let stop = AtomicBool::new(false);
         let ctx = Ctx {
-            client: &client,
             plan: &plan,
             stop: &stop,
             deadline: None,
@@ -1978,24 +1867,6 @@ mod tests {
         );
     }
 
-    // ── hydration envelope ──────────────────────────────────────────────────
-
-    #[test]
-    fn take_result_unwraps_the_envelope() {
-        let row = json!({"sys_id": "abc", "number": "INC0001"});
-        assert_eq!(take_result(json!({"result": row.clone()})), row);
-    }
-
-    #[test]
-    fn take_result_keeps_a_body_that_has_no_envelope() {
-        // Some responses arrive already unwrapped; dropping them would replace
-        // the record with null.
-        let bare = json!({"sys_id": "abc"});
-        assert_eq!(take_result(bare.clone()), bare);
-        assert_eq!(take_result(json!([1, 2])), json!([1, 2]));
-        assert_eq!(take_result(Value::Null), Value::Null);
-    }
-
     #[test]
     fn backoff_doubles_then_caps_at_a_minute() {
         assert_eq!(backoff(1), Duration::from_secs(2));
@@ -2071,53 +1942,5 @@ mod tests {
         assert!(msg.contains("proxy"), "must name the culprit: {msg}");
         assert!(msg.contains("--no-proxy"), "must offer a way out: {msg}");
         assert_eq!(err.exit_code(), 1);
-    }
-
-    #[test]
-    fn delete_event_is_not_hydrated_and_reports_a_null_record() {
-        // No client call can succeed for a row that no longer exists, so `shape`
-        // must short-circuit before touching the network.
-        let event = Event {
-            channel: "/rw/default/incident/x".into(),
-            data: json!({
-                "table_name": "incident",
-                "sys_id": "abc",
-                "operation": "delete",
-                "record": {"sys_mod_count": {"value": "3"}},
-            }),
-        };
-        let h = Hydrate {
-            table: "incident".into(),
-            query: GetQuery::default(),
-        };
-        // A null client would panic if `shape` tried to fetch; reaching the
-        // assert at all proves it did not.
-        let out = shape(event, &unreachable_client(), Some(&h));
-        assert_eq!(out["record"], Value::Null);
-        assert_eq!(out["operation"], "delete");
-    }
-
-    #[test]
-    fn events_pass_through_untouched_without_hydration() {
-        let data = json!({"table_name": "incident", "sys_id": "abc", "operation": "update"});
-        let event = Event {
-            channel: "/rw/default/incident/x".into(),
-            data: data.clone(),
-        };
-        assert_eq!(shape(event, &unreachable_client(), None), data);
-    }
-
-    /// A client pointed at an address nothing will answer on. `shape` must never
-    /// reach it in these tests; if it does, the test fails on the timeout rather
-    /// than silently passing.
-    fn unreachable_client() -> Client {
-        let p = ResolvedProfile {
-            instance: "127.0.0.1:1".into(),
-            ..profile()
-        };
-        Client::builder()
-            .timeout(Duration::from_millis(1))
-            .build(&p)
-            .expect("builder should not need the network")
     }
 }

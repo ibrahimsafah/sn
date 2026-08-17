@@ -33,9 +33,11 @@ fn err_of(out: &std::process::Output) -> Value {
 // ── argument validation (no network) ────────────────────────────────────────
 
 #[test]
-fn watch_requires_a_query_or_a_sys_id() {
+fn watch_requires_a_query() {
     // Watching a whole table with no filter would be a firehose keyed off an
-    // empty channel name; clap must demand a target.
+    // empty channel name; clap must demand the one targeting flag. As a plain
+    // required argument (not a two-alternative group), the error names exactly
+    // what to add.
     let tmp = profile_at("https://example.invalid");
     let out = sn_cmd(tmp.path())
         .args(["watch", "incident"])
@@ -44,26 +46,30 @@ fn watch_requires_a_query_or_a_sys_id() {
         .code(1);
     let stderr = String::from_utf8_lossy(&out.get_output().stderr).to_string();
     assert!(
-        stderr.contains("--query") || stderr.contains("--sys-id"),
+        stderr.contains("--query"),
         "must name the missing target: {stderr}"
     );
 }
 
 #[test]
-fn watch_rejects_query_and_sys_id_together() {
+fn the_removed_targeting_and_hydration_flags_are_unknown() {
+    // 0.13.0 removed --sys-id, --hydrate, --fields and --display-value. They
+    // must fail as unknown flags, not silently parse: --sys-id has a rewrite
+    // (`-q "sys_id=…"`), and hydration changed what `record` held, so a script
+    // still passing them needs to find out here, not from a changed stream.
     let tmp = profile_at("https://example.invalid");
-    sn_cmd(tmp.path())
-        .args([
-            "watch",
-            "incident",
-            "--query",
-            "active=true",
-            "--sys-id",
-            "abc123",
-        ])
-        .assert()
-        .failure()
-        .code(1);
+    for flag in [
+        "--sys-id=abc123",
+        "--hydrate",
+        "--fields=number",
+        "--display-value=all",
+    ] {
+        sn_cmd(tmp.path())
+            .args(["watch", "incident", "-q", "active=true", flag])
+            .assert()
+            .failure()
+            .code(1);
+    }
 }
 
 #[test]
@@ -84,69 +90,11 @@ fn watch_rejects_an_unknown_operation() {
 }
 
 #[test]
-fn fields_without_hydrate_is_a_usage_error() {
-    // --fields only narrows the hydration fetch. With hydration off by default,
-    // accepting it and doing nothing would be exactly the class of bug this repo
-    // has fixed elsewhere (flags silently dropped on the wire). Fail loudly.
-    let tmp = profile_at("https://example.invalid");
-    let out = sn_cmd(tmp.path())
-        .args([
-            "watch",
-            "incident",
-            "-q",
-            "active=true",
-            "--fields",
-            "number,state",
-        ])
-        .assert()
-        .failure()
-        .code(1);
-    let stderr = String::from_utf8_lossy(&out.get_output().stderr).to_string();
-    assert!(
-        stderr.contains("--hydrate"),
-        "must name the flag that makes --fields meaningful: {stderr}"
-    );
-}
-
-#[test]
-fn display_value_without_hydrate_is_a_usage_error() {
-    let tmp = profile_at("https://example.invalid");
-    sn_cmd(tmp.path())
-        .args([
-            "watch",
-            "incident",
-            "-q",
-            "active=true",
-            "--display-value",
-            "all",
-        ])
-        .assert()
-        .failure()
-        .code(1);
-}
-
-#[test]
-fn hydrate_and_no_hydrate_together_is_a_usage_error() {
-    let tmp = profile_at("https://example.invalid");
-    sn_cmd(tmp.path())
-        .args([
-            "watch",
-            "incident",
-            "-q",
-            "active=true",
-            "--hydrate",
-            "--no-hydrate",
-        ])
-        .assert()
-        .failure()
-        .code(1);
-}
-
-#[test]
 fn no_hydrate_is_still_accepted_as_a_no_op() {
-    // 0.9.1 scripts pass --no-hydrate. It now describes the default, so it must
-    // parse rather than exit 1 on an unknown flag. It gets as far as the network
-    // (exit 3 against an address nothing answers on), which proves it parsed.
+    // 0.9.1 scripts pass --no-hydrate. It describes the only behavior left, so
+    // it must parse rather than exit 1 on an unknown flag. It gets as far as
+    // the network (exit 3 against an address nothing answers on), which proves
+    // it parsed.
     let tmp = profile_at("https://127.0.0.1:1");
     sn_cmd(tmp.path())
         .args([

@@ -28,13 +28,9 @@ sn aggregate incident --count -q "assigned_two.name=Abel Tuter"      # 70  typo,
 look identical, so show the query *can* match — confirm the entity exists, or run the same
 shape against a value you know is there.
 
-`sn change list` gives you this for free: its last array element is `__meta`, naming the
-query actually run and the terms discarded.
-
-```bash
-sn change list --type normal -q "assigned_two=x^state=-5" | jq -c '.[-1].__meta'
-# {"encodedQuery":"state=-5","fields":{"applied":["state"],"ignored":["assigned_two"]}}
-```
+`sn change list` checks this for you: a dropped term is a stderr warning naming it
+(`sn: warning: ServiceNow ignored query field(s): assigned_two`). The full account — the
+query the instance actually ran — is the `__meta` element kept under `--output raw`.
 
 **Trust the CLI's own defenses rather than working around them.** `sn variables set` refuses
 unknown names before writing, `sn cmdb` stringifies numeric attributes for you, and `sn ping`
@@ -50,7 +46,6 @@ Silent: `jq` prints empty and exits 0, so a wrong path reads as "no data".
 | `schema columns` | `.default_value`, `.choice_field` | **`.default`**, and `type=="choice"` with options in **`.choices[]`** |
 | `change *` | `.number` | **`.number.value`** — the Change API wraps *every* field as `{display_value, value}`; `state.value` is a float (`-5.0`) |
 | `change nextstates` | a list of `{value,label}` | three keys: `available_states`, `state_label`, **`state_transitions`** (conditions + `transition_available`) |
-| `change list` | every element is a record | the **last** is `{"__meta": …}`, so `length` is off by one |
 | `cmdb get` | `.name` | **`.attributes.name`** — top level is only `attributes` + relations |
 | `aggregate --group-by` | `.stats.groupby_fields` | top level becomes an **array**; `groupby_fields` is a **sibling** of `stats` |
 | `aggregate --sum-fields` | `.stats.sum` | **`.stats.sum.<field>`** — sum/avg/min/max nest per field |

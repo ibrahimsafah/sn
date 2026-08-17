@@ -1,8 +1,9 @@
 use crate::body::EmptyBody;
 use crate::cli::kernel::{confirm_delete, confirm_destructive, connect, emit};
-use crate::cli::{BodyArgs, DisplayValueOpt, GlobalFlags, Paging, SetLimit, ADVANCED};
+use crate::cli::{BodyArgs, DisplayValueOpt, GlobalFlags, OutputMode, Paging, SetLimit, ADVANCED};
 use crate::error::{Error, Result};
 use clap::{Subcommand, ValueEnum};
+use serde_json::Value;
 
 #[derive(Subcommand, Debug)]
 pub enum ChangeSub {
@@ -287,6 +288,18 @@ fn base_path(ct: Option<ChangeType>) -> &'static str {
 }
 
 pub fn list(global: &GlobalFlags, args: ChangeListArgs) -> Result<()> {
+    // Refused before the network, not passed through: the Change API parses a
+    // query field-by-field, finds no field named `ORDERBYDESCopened_at`, and
+    // drops the clause — so "the N most recent changes" comes back in arbitrary
+    // order as N well-formed records, exit 0. A caller who asked for an order
+    // and got an arbitrary one has a wrong answer, not a degraded one.
+    if let Some(sort) = args.query.as_deref().and_then(sort_clause) {
+        return Err(Error::Usage(format!(
+            "the Change API silently discards sort clauses; `{sort}` would be dropped and the \
+             order would be arbitrary. Sort via the Table API instead: \
+             `sn table list change_request -q \"<query>^{sort}\"`"
+        )));
+    }
     let client = connect(global)?;
     let path = base_path(args.r#type);
     let mut query: Vec<(String, String)> = Vec::new();
@@ -311,7 +324,7 @@ pub fn list(global: &GlobalFlags, args: ChangeListArgs) -> Result<()> {
         query.push(("sysparm_view".into(), v));
     }
     let resp = client.get(path, &query)?;
-    emit(global, resp)
+    emit_list(global, resp)
 }
 
 pub fn get(global: &GlobalFlags, args: ChangeGetArgs) -> Result<()> {
@@ -420,7 +433,7 @@ pub fn models(global: &GlobalFlags, args: ChangeOptionalIdArg) -> Result<()> {
         None => "/api/sn_chg_rest/change/model".to_string(),
     };
     let resp = client.get(&path, &[])?;
-    emit(global, resp)
+    emit_list(global, resp)
 }
 
 pub fn templates(global: &GlobalFlags, args: ChangeOptionalIdArg) -> Result<()> {
@@ -430,7 +443,73 @@ pub fn templates(global: &GlobalFlags, args: ChangeOptionalIdArg) -> Result<()> 
         None => "/api/sn_chg_rest/change/standard/template".to_string(),
     };
     let resp = client.get(&path, &[])?;
+    emit_list(global, resp)
+}
+
+/// The first `ORDERBY`/`ORDERBYDESC` clause in an encoded query, if any. A
+/// clause is a whole `^`-separated term, so a field value merely containing
+/// the word cannot match.
+fn sort_clause(query: &str) -> Option<&str> {
+    query.split('^').find(|t| t.starts_with("ORDERBY"))
+}
+
+/// Emit a Change API list response: the `result` array's trailing `__meta`
+/// element — measured present on `list`, `models` and `templates`, absent on
+/// `task list` — is not a record, so it is stripped before the array reaches
+/// stdout (`--output raw` keeps it: raw means the envelope as ServiceNow sent
+/// it). Its `fields.ignored` is promoted to a stderr warning first, in every
+/// output mode, because a dropped term means the filter did not apply and the
+/// results are broader than the caller asked for — the silent-wrong-answer this
+/// CLI works hardest to prevent, and the one signal the Table API never gives.
+fn emit_list(global: &GlobalFlags, mut resp: Value) -> Result<()> {
+    if let Some(meta) = trailing_meta(&resp) {
+        warn_ignored_fields(meta);
+        if global.output != OutputMode::Raw {
+            if let Some(arr) = resp.get_mut("result").and_then(Value::as_array_mut) {
+                arr.pop();
+            }
+        }
+    }
     emit(global, resp)
+}
+
+/// The `__meta` value when the response's `result` array ends in the Change
+/// API's meta element. Keyed on the element being a lone-`__meta` object, not
+/// on position alone — a real change never has that shape.
+fn trailing_meta(resp: &Value) -> Option<&Value> {
+    let obj = resp.get("result")?.as_array()?.last()?.as_object()?;
+    if obj.len() == 1 {
+        obj.get("__meta")
+    } else {
+        None
+    }
+}
+
+/// Name the query terms the instance threw away. Two kinds of noise are
+/// filtered first, both measured live: a bare `""` (present beside real names,
+/// and alone on some releases), and `sysparm_*` entries — with no
+/// `sysparm_query` the API tries every request parameter as a column filter
+/// and reports the CLI's own switches (`sysparm_limit`, …) as ignored, though
+/// they took effect as parameters. Neither is a term the caller wrote.
+fn warn_ignored_fields(meta: &Value) {
+    let Some(ignored) = meta
+        .get("fields")
+        .and_then(|f| f.get("ignored"))
+        .and_then(Value::as_array)
+    else {
+        return;
+    };
+    let dropped: Vec<&str> = ignored
+        .iter()
+        .filter_map(Value::as_str)
+        .filter(|s| !s.is_empty() && !s.starts_with("sysparm_"))
+        .collect();
+    if !dropped.is_empty() {
+        eprintln!(
+            "sn: warning: ServiceNow ignored query field(s): {} — results are unfiltered by them",
+            dropped.join(", ")
+        );
+    }
 }
 
 pub fn task(global: &GlobalFlags, sub: ChangeTaskSub) -> Result<()> {
@@ -557,4 +636,41 @@ fn conflict_remove(global: &GlobalFlags, args: ChangeConflictRemoveArgs) -> Resu
     let path = format!("/api/sn_chg_rest/change/{}/conflict", args.sys_id);
     client.delete(&path, &[])?;
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{sort_clause, trailing_meta};
+    use serde_json::json;
+
+    #[test]
+    fn sort_clause_finds_a_whole_term_only() {
+        assert_eq!(
+            sort_clause("ORDERBYDESCopened_at"),
+            Some("ORDERBYDESCopened_at")
+        );
+        assert_eq!(
+            sort_clause("state=-5^ORDERBYopened_at"),
+            Some("ORDERBYopened_at")
+        );
+        // The word inside a value is not a clause.
+        assert_eq!(sort_clause("short_description=ORDERBYDESC"), None);
+        assert_eq!(sort_clause("state=-5^active=true"), None);
+    }
+
+    #[test]
+    fn trailing_meta_matches_the_lone_meta_object_only() {
+        let with = json!({"result": [{"number": {"value": "CHG1"}}, {"__meta": {"fields": {}}}]});
+        assert!(trailing_meta(&with).is_some());
+
+        // A record that happens to carry a `__meta` field beside others is a
+        // record; only the lone-key element is the API's trailer.
+        let record_like = json!({"result": [{"__meta": {}, "number": {}}]});
+        assert!(trailing_meta(&record_like).is_none());
+
+        let none = json!({"result": [{"number": {"value": "CHG1"}}]});
+        assert!(trailing_meta(&none).is_none());
+        assert!(trailing_meta(&json!({"result": []})).is_none());
+        assert!(trailing_meta(&json!({"result": "x"})).is_none());
+    }
 }

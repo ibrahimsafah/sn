@@ -8,6 +8,8 @@
 
 ### Fixed
 
+- `sn change list` (and `models`/`templates`) returns records only: the Change API's trailing `__meta` element is stripped from the array, so `length` matches the record count (`--output raw` keeps it). Query terms the instance silently dropped become a stderr warning naming them.
+- `sn change list -q` refuses `ORDERBY` clauses up front: the Change API silently discards them and returns arbitrary order. The error points at `sn table list change_request`, which sorts correctly.
 - `sn watch` no longer loses events to the instance's session reaper. The watcher replaces its session every 45 seconds (`--session-rotate <SECS>`, 0 disables) with a make-before-break handoff: the replacement subscribes before the old session disconnects, the old socket is drained, and the overlap is deduplicated. A routine reap opens no gap and writes no marker; markers now indicate genuine failures only.
 
 ## 0.12.1 (2026-08-13)

@@ -10,10 +10,17 @@ use wiremock::{Mock, ResponseTemplate};
 #[tokio::test(flavor = "current_thread")]
 async fn change_list_normal() {
     let server = wiremock::MockServer::start().await;
+    // The Change API ends every list's result array with a `__meta` element.
+    // With no sysparm_query it reports the CLI's own sysparm_* switches (and a
+    // bare "") as "ignored" — parameters, not dropped terms, as measured live.
     Mock::given(method("GET"))
         .and(path("/api/sn_chg_rest/change/normal"))
         .respond_with(ResponseTemplate::new(200).set_body_json(json!({
-            "result": [{"number": "CHG001", "type": "normal"}]
+            "result": [
+                {"number": "CHG001", "type": "normal"},
+                {"__meta": {"encodedQuery": "", "fields": {"applied": [],
+                    "ignored": ["", "sysparm_display_value", "sysparm_limit"]}}}
+            ]
         })))
         .mount(&server)
         .await;
@@ -36,6 +43,181 @@ async fn change_list_normal() {
         let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
         assert!(v.is_array());
         assert_eq!(v[0]["number"], "CHG001");
+        // `list` returns records only: the meta element is stripped, so length
+        // agrees with the record count and `.[].number` has no trailing null.
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        // A "" in `ignored` is noise, not a dropped term — no warning for it.
+        let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+        assert!(
+            !stderr.contains("warning"),
+            "no warning expected, got: {stderr}"
+        );
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn change_list_warns_when_the_instance_drops_query_terms() {
+    let server = wiremock::MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/sn_chg_rest/change/normal"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {"number": "CHG001"},
+                {"__meta": {"encodedQuery": "state=-5",
+                            "fields": {"applied": ["state"], "ignored": ["assigned_two", ""]}}}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    let tmp = write_profiles(
+        "test",
+        &[ProfileSpec {
+            name: "test",
+            instance: &server.uri(),
+            username: "u",
+            password: "p",
+        }],
+    );
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = sn_cmd(tmp.path());
+        let out = cmd
+            .args([
+                "--compact",
+                "change",
+                "list",
+                "--type",
+                "normal",
+                "-q",
+                "assigned_two=x^state=-5",
+            ])
+            .assert()
+            .success();
+        let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+        assert!(
+            stderr.contains("ignored query field(s): assigned_two"),
+            "stderr should name the dropped term, got: {stderr}"
+        );
+        // The warning names real terms only; the "" entry is filtered out.
+        assert!(!stderr.contains("assigned_two, "));
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn change_list_raw_keeps_the_meta_element() {
+    let server = wiremock::MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/sn_chg_rest/change/normal"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {"number": "CHG001"},
+                {"__meta": {"encodedQuery": "", "fields": {"applied": [], "ignored": ["bogus"]}}}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    let tmp = write_profiles(
+        "test",
+        &[ProfileSpec {
+            name: "test",
+            instance: &server.uri(),
+            username: "u",
+            password: "p",
+        }],
+    );
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = sn_cmd(tmp.path());
+        let out = cmd
+            .args([
+                "--compact",
+                "--output",
+                "raw",
+                "change",
+                "list",
+                "--type",
+                "normal",
+            ])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+        // Raw means the envelope as ServiceNow sent it, meta element included.
+        assert_eq!(v["result"].as_array().unwrap().len(), 2);
+        assert!(v["result"][1].get("__meta").is_some());
+        // The dropped-term warning fires in every output mode.
+        let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+        assert!(stderr.contains("ignored query field(s): bogus"));
+    })
+    .await
+    .unwrap();
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn change_list_refuses_a_sort_clause_before_the_network() {
+    // No mock server: the refusal must fire on argv alone. A live call would
+    // fail loudly here (connection refused, exit 3), so a passing exit 1
+    // proves the gate runs first.
+    let tmp = write_profiles(
+        "test",
+        &[ProfileSpec {
+            name: "test",
+            instance: "http://127.0.0.1:1",
+            username: "u",
+            password: "p",
+        }],
+    );
+    let mut cmd = sn_cmd(tmp.path());
+    let out = cmd
+        .args(["change", "list", "-q", "state=-5^ORDERBYDESCopened_at"])
+        .assert()
+        .failure()
+        .code(1);
+    let stderr = String::from_utf8(out.get_output().stderr.clone()).unwrap();
+    assert!(
+        stderr.contains("ORDERBYDESCopened_at"),
+        "error should name the clause, got: {stderr}"
+    );
+    assert!(
+        stderr.contains("sn table list change_request"),
+        "error should point at the working alternative, got: {stderr}"
+    );
+}
+
+#[tokio::test(flavor = "current_thread")]
+async fn change_models_strips_the_meta_element() {
+    let server = wiremock::MockServer::start().await;
+    Mock::given(method("GET"))
+        .and(path("/api/sn_chg_rest/change/model"))
+        .respond_with(ResponseTemplate::new(200).set_body_json(json!({
+            "result": [
+                {"sys_id": "m1"},
+                {"__meta": {"encodedQuery": "", "fields": {"applied": [], "ignored": []}}}
+            ]
+        })))
+        .mount(&server)
+        .await;
+    let tmp = write_profiles(
+        "test",
+        &[ProfileSpec {
+            name: "test",
+            instance: &server.uri(),
+            username: "u",
+            password: "p",
+        }],
+    );
+    tokio::task::spawn_blocking(move || {
+        let mut cmd = sn_cmd(tmp.path());
+        let out = cmd
+            .args(["--compact", "change", "models"])
+            .assert()
+            .success();
+        let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
+        let v: serde_json::Value = serde_json::from_str(stdout.trim()).unwrap();
+        assert_eq!(v.as_array().unwrap().len(), 1);
+        assert_eq!(v[0]["sys_id"], "m1");
     })
     .await
     .unwrap();

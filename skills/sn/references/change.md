@@ -20,30 +20,22 @@ sn change get <sys_id> --type normal | jq -r '.number.value'   # → CHG0030001
 
 `state.value` comes back as a **float** (`-5.0`, `3.0`). Coerce before comparing.
 
-## The last array element is not a record
+## Dropped terms warn; `__meta` lives under raw
 
-`sn change list` appends a `__meta` entry, so `length` is one more than the number of changes
-and a naive map hits a non-record:
-
-```bash
-sn change list --type normal --setlimit 3 | jq 'length'     # 4 — three changes plus __meta
-```
-
-Drop it with `jq '[.[] | select(has("__meta") | not)]'`.
-
-But read it first, because it reports the query the instance *actually ran* — the dropped-term
-check, free:
+`sn change list` returns records only. The API's trailing `__meta` element — the query the
+instance *actually ran* — is stripped from the array; when it names a dropped term, the CLI
+warns on stderr instead, so an unfiltered result never passes silently. Read the element
+itself under `--output raw`:
 
 ```bash
-sn change list --type normal -q "assigned_two=x^state=-5" | jq -c '.[-1].__meta'
-# {"encodedQuery":"state=-5","fields":{"applied":["state"],"ignored":["assigned_two"]}}
+sn change list --type normal -q "state=-5" --output raw | jq -c '.result[-1].__meta'
+# {"encodedQuery":"state=-5","fields":{"applied":["state"],"ignored":[]}}
 ```
 
-## `sn change list` cannot sort
+## Sorting goes through the Table API
 
-`ORDERBY`/`ORDERBYDESC` are discarded — ascending and descending return identical rows, and
-`__meta` shows why (`encodedQuery: ""`, `ignored: [""]`). When order matters, go through the
-Table API, which honors it:
+The Change API silently discards `ORDERBY`/`ORDERBYDESC` — ascending and descending return
+identical rows — so the CLI refuses a sort clause up front. When order matters:
 
 ```bash
 sn table list change_request -q "ORDERBYDESCopened_at" --fields "number,state,short_description" --setlimit 5

@@ -179,13 +179,14 @@ quiet table look identical.
   `jq 'select(.sn_watch == null)'` if you want events only.
 - **It is not an event**: it does not count against `--max-events` and does not reset the
   `--idle-timeout` clock.
-- **Markers are routine.** ServiceNow reaps a watcher's HTTP session every minute or two
-  regardless of traffic; the watcher detects the reap on its next poll, reconnects on a fresh
-  session, and writes a marker. A long watch therefore carries periodic small-`downtime_ms`
-  markers — expected, not a sign of trouble. One honest caveat: the reap precedes its detection
-  by up to one ~30s long-poll cycle, and that undetected window is not inside `downtime_ms` —
-  when completeness matters, reconcile from shortly *before* the reported window, not just
-  inside it.
+- **Rotation outruns the reaper.** ServiceNow reaps a watcher's HTTP session every minute or
+  two regardless of traffic, so the watcher preemptively replaces its session every 45 seconds
+  (`--session-rotate <SECS>`, `0` disables): the replacement subscribes *before* the old
+  session disconnects, the old socket is drained, and the overlap is deduplicated — no gap
+  opens and no marker is written. A marker therefore means something genuinely broke (a network
+  drop, or a rotation that lost its race to the reaper). When completeness matters, reconcile
+  against the table over the marker's window, starting shortly *before* it — detection of a
+  genuine death can lag by up to one ~30s long-poll cycle.
 - **One marker per gap, not per attempt.** `downtime_ms` spans the whole outage however many
   reconnects it took; `attempt` is the ordinal of the one that succeeded. A clean run emits no
   marker at all.

@@ -104,7 +104,7 @@ case $? in
   4) if [ "$(jq -r '.error.status_code' /tmp/sn.err)" = 403 ]; then
        echo "authenticated, but forbidden — the role/ACL, not the password" >&2
      else
-       echo "auth failed — OAuth: 'sn auth login'; basic: re-add the profile" >&2
+       echo "auth failed — OAuth: 'sn profile login'; basic: re-add the profile" >&2
      fi; exit 1 ;;
 esac
 ```
@@ -184,7 +184,7 @@ SN_CONFIG_DIR=/tmp/sn-sandbox sn --profile ci table list incident --limit 1
 (the token is minted and verified). The default `authorization_code` grant needs a
 browser, so there is nothing an agent can verify: `add` refuses on a non-TTY rather
 than save an untested profile. Register it with `--no-verify` and have a human run
-`sn auth login --profile <name>`. Session state is `sn auth status` / `refresh` /
+`sn profile login --profile <name>`. Session state is `sn profile status` / `refresh` /
 `logout`; tokens then refresh transparently on every command.
 
 **Profile selection** (highest precedence first): `--profile <name>` →
@@ -1220,7 +1220,7 @@ add tehubersheezy/servicenow-cli`, or a local clone path), then
 ```
 sn init [--profile NAME]                          sn ping [--profile NAME]
 sn profile add NAME --instance X --username Y --password-stdin [--force|--no-verify|--set-default]
-sn profile list|show NAME|use NAME|remove NAME    sn auth login|status|refresh|logout
+sn profile list|show NAME|use NAME|remove NAME|login|logout|status|refresh
 sn user me     sn open TABLE [SYS_ID] [--print-url]     sn completion SHELL
 
 # Record references: everywhere below that takes TABLE SYS_ID (or CLASS SYS_ID),

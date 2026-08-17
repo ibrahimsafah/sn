@@ -8,20 +8,7 @@ use crate::config::{
 use crate::error::{Error, Result};
 use crate::oauth;
 use crate::observability::log_note;
-use clap::Subcommand;
 use serde_json::{json, Value};
-
-#[derive(Subcommand, Debug)]
-pub enum AuthSub {
-    /// Run the OAuth flow for the selected (already-configured) profile and cache tokens.
-    Login,
-    /// Discard the profile's cached OAuth tokens.
-    Logout,
-    /// Show the resolved auth method and OAuth token status for a profile.
-    Status,
-    /// Force an OAuth token refresh now.
-    Refresh,
-}
 
 /// Pure session command: run the OAuth flow for an already-configured OAuth
 /// profile and cache the tokens. Configuration lives in `sn profile add` /
@@ -55,7 +42,7 @@ pub fn login(global: &GlobalFlags) -> Result<()> {
 /// Run the OAuth flow for an already-persisted profile named `name`, cache the
 /// resulting tokens, and verify them against the instance. Returns the resolved
 /// profile and the authenticated user_name (if the verify call surfaced one).
-/// Shared by `sn auth login` and `sn init`'s OAuth branch.
+/// Shared by `sn profile login` and `sn init`'s OAuth branch.
 pub(crate) fn complete_oauth_login(
     global: &GlobalFlags,
     name: &str,

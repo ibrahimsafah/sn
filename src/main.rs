@@ -1,7 +1,7 @@
 use clap::error::ErrorKind;
 use is_terminal::IsTerminal;
 use sn::cli::{
-    ApiSub, AppSub, AtfSub, AttachmentSub, AuthSub, CatalogSub, ChangeSub, Cli, CmdbSub, Command,
+    ApiSub, AppSub, AtfSub, AttachmentSub, CatalogSub, ChangeSub, Cli, CmdbSub, Command,
     ContextSub, IdentifySub, ImportSub, SchemaSub, ScoresSub, TableSub, UpdateSetSub, UserSub,
     VariablesSub,
 };
@@ -73,12 +73,6 @@ fn run(cli: Cli) -> Result<()> {
     } = cli;
     match command {
         Command::Init(args) => sn::cli::init::run(&global, args),
-        Command::Auth { sub } => match sub {
-            AuthSub::Login => sn::cli::auth::login(&global),
-            AuthSub::Logout => sn::cli::auth::logout(&global),
-            AuthSub::Status => sn::cli::auth::status(&global),
-            AuthSub::Refresh => sn::cli::auth::refresh(&global),
-        },
         Command::Profile { sub } => sn::cli::profile::run(&global, sub),
         Command::Introspect => sn::cli::introspect::run(&global),
         Command::Table { sub } => match sub {

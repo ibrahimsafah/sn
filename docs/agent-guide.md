@@ -1221,7 +1221,15 @@ add tehubersheezy/servicenow-cli`, or a local clone path), then
 sn init [--profile NAME]                          sn ping [--profile NAME]
 sn profile add NAME --instance X --username Y --password-stdin [--force|--no-verify|--set-default]
 sn profile list|show NAME|use NAME|remove NAME    sn auth login|status|refresh|logout
-sn user me     sn open TABLE SYS_ID [--print-url]     sn completion SHELL
+sn user me     sn open TABLE [SYS_ID] [--print-url]     sn completion SHELL
+
+# Record references: everywhere below that takes TABLE SYS_ID (or CLASS SYS_ID),
+# one token `table:sys_id` / `table:number` works instead; a number costs one
+# lookup that errors rather than matching arbitrarily when the table has no
+# usable `number` field.
+sn get REF     # REF = table:sys_id | table:number | bare number with a standard
+               # prefix (INC, CHG, CTASK, PRB, REQ, RITM, SCTASK, KB, SIR);
+               # returns {table, sys_id, record, variables, journal}
 sn raw METHOD PATH [-q k=v ...] [--data ...|--field k=v ...]
 sn graphql QUERY|@FILE|@- [--var K=V ...] [--variables JSON|@FILE|@-] [--operation NAME]
 sn introspect  sn progress PROGRESS_ID
@@ -1236,13 +1244,13 @@ sn schema choices TABLE COLUMN
 # Shared list flags: --query EQ  --fields CSV  --setlimit N(=--limit)  --offset N
 #   --display-value false|true|all  --all [--array] [--max-records N]  --output default|raw|table
 sn table list TABLE [shared list flags] [--view N] [--query-category C] [--query-no-domain] [--no-count]
-sn table get  TABLE SYS_ID [--fields CSV] [--display-value ...] [--view N]
+sn table get  TABLE [SYS_ID] [--fields CSV] [--display-value ...] [--view N]
 sn table create  TABLE (--data JSON|@FILE|@- | --field K=V ...) [--fields CSV] [--display-value ...] [--input-display-value]
-sn table update  TABLE SYS_ID (--data ...|--field K=V ...) [same write flags]     # PATCH — the only write verb
-sn table delete  TABLE SYS_ID [--yes] [--query-no-domain]
-sn table TABLE [SYS_ID]                                                           # verb optional: = list / = get
-sn journal TABLE SYS_ID [--comments|--work-notes] [--limit N] [--raw] [--source record|table]
-sn variables get TABLE SYS_ID                       sn variables set TABLE SYS_ID (--data JSON|@FILE|@- | --field K=V ...)
+sn table update  TABLE [SYS_ID] (--data ...|--field K=V ...) [same write flags]   # PATCH — the only write verb
+sn table delete  TABLE [SYS_ID] [--yes] [--query-no-domain]
+sn table TABLE [SYS_ID]                                       # verb optional: = list / = get (a table:id token = get)
+sn journal TABLE [SYS_ID] [--comments|--work-notes] [--limit N] [--raw] [--source record|table]
+sn variables get TABLE [SYS_ID]                     sn variables set TABLE [SYS_ID] (--data JSON|@FILE|@- | --field K=V ...)
 
 sn change list [--type normal|emergency|standard] [shared list flags]
 sn change get|update|delete SYS_ID [--type ...] [--yes]     sn change create [--type ...] [--template ID] (--data|--field)
@@ -1253,13 +1261,14 @@ sn change ci list|add CHANGE_SYS_ID (--data|--field)    sn change conflict get|a
 sn change conflict remove SYS_ID [--yes]            # clears every conflict on the change
 
 sn attachment list [--query EQ] [--setlimit N]      sn attachment get|delete SYS_ID [--yes]
-sn attachment upload --table T --record SYS_ID --file PATH [--file-name N] [--content-type MIME]
+sn attachment upload [--table T] --record SYS_ID|T:ID --file PATH [--file-name N] [--content-type MIME]
 sn attachment download SYS_ID [--out PATH]
 
-sn cmdb list CLASS [--query EQ] [--setlimit N]       sn cmdb get CLASS SYS_ID      sn cmdb meta CLASS
+sn cmdb list CLASS [--query EQ] [--setlimit N]       sn cmdb get CLASS [SYS_ID]    sn cmdb meta CLASS
 sn cmdb create|update CLASS [SYS_ID] (--data|--field) [--source NAME]   # default source "Manual Entry"
 sn cmdb CLASS [SYS_ID]                                                  # verb optional: = list / = get
-sn cmdb relation add CLASS SYS_ID (--data|--field)   sn cmdb relation delete CLASS SYS_ID REL_SYS_ID [--yes]
+sn cmdb relation add CLASS [SYS_ID] (--data|--field)
+sn cmdb relation delete CLASS SYS_ID REL_SYS_ID [--yes]      # or: CLASS:ID REL_SYS_ID
 
 sn import create STAGING_TABLE (--data|--field)     sn import bulk STAGING_TABLE --data JSON|@FILE|@-
 sn import get STAGING_TABLE SYS_ID

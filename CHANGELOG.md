@@ -8,7 +8,14 @@
 
 ### Added
 
+- **`sn get <REF>`** — one record with its catalog variables and journal entries, by reference: `sn get incident:INC0010001`, `sn get incident:<sys_id>`, or a bare number with a standard prefix (`sn get SIR0010001`; INC, CHG, CTASK, PRB, REQ, RITM, SCTASK, KB, SIR). Resolution and the journal ride one GraphQL request; a number that cannot be resolved fails loudly instead of matching an arbitrary record.
+- Every `(table, sys_id)` pair also accepts the combined `table:sys_id` / `table:number` reference as a single argument: `table get/update/delete`, `journal`, `open`, `variables get/set`, `cmdb get/update`, `cmdb relation add/delete`, and `attachment upload --record` (which then needs no `--table`). The implied-verb shorthand reads it too: `sn table incident:INC0010001` is a `get`.
 - `sn context` shows the instance-side session context — the application scope and update set the caller's tracked writes are captured under — in one API round trip. `sn context scope <name|sys_id>` and `sn context updateset <name|sys_id>` switch them, verified by re-read. A stale update-set preference is reported (`source`, `preference_stale`) rather than silently healed.
+
+### Breaking
+
+- Introspect schema: the `sys_id` positional on the reference-taking commands is now optional, and `attachment upload --table` is no longer required — regenerate any cached agent/MCP schemas.
+- `table get/update/delete` now validate the table name and sys_id (lowercase identifier; sys_id charset) instead of passing arbitrary strings into the URL.
 
 ### Fixed
 

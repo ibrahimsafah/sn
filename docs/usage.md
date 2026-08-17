@@ -61,15 +61,30 @@ sn table list incident --query "active=true^priority=1" \
 sn table get incident <sys_id>
 sn table get incident <sys_id> --display-value false
 
+# Record references: one token names the record. `table:sys_id` is used directly;
+# `table:number` costs one lookup that fails loudly if the table has no usable
+# `number` field (rather than matching an arbitrary record).
+sn table get incident:INC0010001
+sn journal incident:INC0010001            # every (TABLE, SYS_ID) pair takes the form
+sn open incident:INC0010001
+
+# The composite read: the record plus its catalog variables and journal entries.
+# Takes a reference, or a bare number with a standard prefix
+# (INC, CHG, CTASK, PRB, REQ, RITM, SCTASK, KB, SIR).
+sn get INC0010001
+sn get incident:<sys_id>
+
 # The read verb is optional on table and cmdb — these mirror the REST path:
 sn table incident <sys_id>          # same as: sn table get incident <sys_id>
+sn table incident:INC0010001        # a reference implies get too
 sn table incident                   # same as: sn table list incident
 sn cmdb cmdb_ci_server <sys_id>     # same as: sn cmdb get cmdb_ci_server <sys_id>
 ```
 
 Only `get` and `list` are ever inferred, never a write, and only when the choice is
-unambiguous — `get` needs a second positional and `list` refuses one. A misspelled verb
-stays an error: `sn table lst incident` still tells you it meant `list`.
+unambiguous — a `table:id` reference is a `get`, a bare noun is a `list`, and a noun
+plus sys_id is a `get`. A misspelled verb stays an error: `sn table lst incident`
+still tells you it meant `list`.
 
 Note that `--display-value true` (the default) also renders dates in the calling user's
 timezone and locale format, and a display-formatted date cannot be fed back into an

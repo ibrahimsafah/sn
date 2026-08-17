@@ -29,8 +29,8 @@
 //! they store row JSON, not per-variable values.
 
 use crate::body::{self, EmptyBody};
-use crate::cli::journal::{validate_identifier, validate_sys_id};
 use crate::cli::kernel::{connect, write_response};
+use crate::cli::record_ref;
 use crate::cli::GlobalFlags;
 use crate::client::Client;
 use crate::error::{Error, Result};
@@ -52,19 +52,21 @@ pub enum VariablesSub {
 #[derive(clap::Args, Debug)]
 pub struct VariablesGetArgs {
     /// Table the record lives in (sc_req_item, or a record producer's target
-    /// like incident). An sc_task is resolved to its request item.
+    /// like incident), or a combined `table:sys_id` / `table:number` reference.
+    /// An sc_task is resolved to its request item.
     pub table: String,
-    /// sys_id of the record.
-    pub sys_id: String,
+    /// sys_id of the record. Omit when TABLE is a `table:id` reference.
+    pub sys_id: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct VariablesSetArgs {
     /// Table the record lives in (sc_req_item, or a record producer's target
-    /// like incident). An sc_task is resolved to its request item.
+    /// like incident), or a combined `table:sys_id` / `table:number` reference.
+    /// An sc_task is resolved to its request item.
     pub table: String,
-    /// sys_id of the record.
-    pub sys_id: String,
+    /// sys_id of the record. Omit when TABLE is a `table:id` reference.
+    pub sys_id: Option<String>,
     /// Body source: inline JSON object of name/value pairs, @file (path), or
     /// @- (stdin). Names are case-sensitive; values are raw (reference →
     /// sys_id, checkbox → true/false).
@@ -78,7 +80,7 @@ pub struct VariablesSetArgs {
 
 /// One variable, `get`'s output row. Sorted by name for stable output.
 #[derive(Serialize, Debug)]
-struct VarRow {
+pub(crate) struct VarRow {
     name: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     label: Option<String>,
@@ -86,18 +88,17 @@ struct VarRow {
 }
 
 pub fn get(global: &GlobalFlags, args: VariablesGetArgs) -> Result<()> {
-    validate_identifier(&args.table, "table")?;
-    validate_sys_id(&args.sys_id)?;
+    let r = record_ref::parse_pair(&args.table, args.sys_id.as_deref(), "table")?;
     let client = connect(global)?;
+    let record_sys_id = r.resolve(&client)?;
 
-    let (table, sys_id, _) = resolve_target(&client, &args.table, &args.sys_id)?;
+    let (table, sys_id, _) = resolve_target(&client, &r.table, &record_sys_id)?;
     let rows = fetch_vars(&client, &table, &sys_id)?;
     write_response(global, &serde_json::to_value(rows).expect("rows serialize"))
 }
 
 pub fn set(global: &GlobalFlags, args: VariablesSetArgs) -> Result<()> {
-    validate_identifier(&args.table, "table")?;
-    validate_sys_id(&args.sys_id)?;
+    let r = record_ref::parse_pair(&args.table, args.sys_id.as_deref(), "table")?;
     let body = body::from_flags(args.data, args.field, EmptyBody::Reject)?;
     let requested = body.as_object().expect("build_body returns an object");
     if requested.is_empty() {
@@ -107,7 +108,8 @@ pub fn set(global: &GlobalFlags, args: VariablesSetArgs) -> Result<()> {
     }
 
     let client = connect(global)?;
-    let (table, sys_id, resolved_from) = resolve_target(&client, &args.table, &args.sys_id)?;
+    let record_sys_id = r.resolve(&client)?;
+    let (table, sys_id, resolved_from) = resolve_target(&client, &r.table, &record_sys_id)?;
 
     // Pre-flight: the endpoint silently skips unknown names, so reject them
     // here — before anything is written — with the actual pool in the error.
@@ -179,7 +181,7 @@ pub fn set(global: &GlobalFlags, args: VariablesSetArgs) -> Result<()> {
 /// Follow an sc_task to the sc_req_item that owns the variable pool. Returns
 /// `(table, sys_id, resolved_from)`; `resolved_from` names the original task
 /// when a hop happened.
-fn resolve_target(
+pub(crate) fn resolve_target(
     client: &Client,
     table: &str,
     sys_id: &str,
@@ -220,6 +222,26 @@ fn resolve_target(
 /// Read the record's variable pool from wherever it is stored. An empty pool
 /// triggers an existence check so a bad sys_id 404s instead of returning [].
 fn fetch_vars(client: &Client, table: &str, sys_id: &str) -> Result<Vec<VarRow>> {
+    let rows = fetch_vars_unchecked(client, table, sys_id)?;
+    if rows.is_empty() {
+        // No rows: either the record has no variables or it does not exist.
+        // The existence probe makes the difference visible (its 404 propagates).
+        client.get(
+            &format!("/api/now/table/{table}/{sys_id}"),
+            &query_pairs(&[("sysparm_fields", "sys_id")]),
+        )?;
+    }
+    Ok(rows)
+}
+
+/// [`fetch_vars`] without the empty-pool existence probe, for callers that
+/// have already proven the record exists (`sn get` does, in the same GraphQL
+/// round trip that resolves the reference).
+pub(crate) fn fetch_vars_unchecked(
+    client: &Client,
+    table: &str,
+    sys_id: &str,
+) -> Result<Vec<VarRow>> {
     let (path, query, name_key, label_key, value_key) = if table == "sc_req_item" {
         (
             "/api/now/table/sc_item_option_mtom",
@@ -252,15 +274,6 @@ fn fetch_vars(client: &Client, table: &str, sys_id: &str) -> Result<Vec<VarRow>>
         .and_then(Value::as_array)
         .cloned()
         .unwrap_or_default();
-    if results.is_empty() {
-        // No rows: either the record has no variables or it does not exist.
-        // The existence probe makes the difference visible (its 404 propagates).
-        client.get(
-            &format!("/api/now/table/{table}/{sys_id}"),
-            &query_pairs(&[("sysparm_fields", "sys_id")]),
-        )?;
-        return Ok(Vec::new());
-    }
     let text = |row: &Value, key: &str| {
         row.get(key)
             .and_then(Value::as_str)

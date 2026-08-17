@@ -1,5 +1,7 @@
 use crate::body::{self, EmptyBody};
+use crate::cli::journal::validate_sys_id;
 use crate::cli::kernel::{confirm_delete, connect, emit};
+use crate::cli::record_ref;
 use crate::cli::{BodyArgs, GlobalFlags, Paging};
 use crate::error::{Error, Result};
 use clap::Subcommand;
@@ -42,10 +44,11 @@ pub struct CmdbListArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbGetArgs {
-    /// CMDB class name (e.g. `cmdb_ci_linux_server`).
+    /// CMDB class name (e.g. `cmdb_ci_linux_server`), or a combined
+    /// `class:sys_id` / `class:number` reference.
     pub class: String,
-    /// sys_id of the CI.
-    pub sys_id: String,
+    /// sys_id of the CI. Omit when CLASS is a `class:id` reference.
+    pub sys_id: Option<String>,
 }
 
 #[derive(clap::Args, Debug)]
@@ -65,10 +68,11 @@ pub struct CmdbCreateArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbUpdateArgs {
-    /// CMDB class name (e.g. `cmdb_ci_linux_server`).
+    /// CMDB class name (e.g. `cmdb_ci_linux_server`), or a combined
+    /// `class:sys_id` / `class:number` reference.
     pub class: String,
-    /// sys_id of the CI.
-    pub sys_id: String,
+    /// sys_id of the CI. Omit when CLASS is a `class:id` reference.
+    pub sys_id: Option<String>,
     /// Body source: inline JSON, @file (path), or @- (stdin). Give the CI's fields flat; they are wrapped into the `attributes` envelope this API requires. A body whose `attributes` is a JSON object is already an envelope and keeps its shape. Attribute values go out as strings either way, since the API casts each to a Java String and answers a JSON number or boolean with an HTTP 500; an object or array is refused up front. A flat body's top-level `source` is refused as ambiguous — pass provenance as --source.
     #[arg(long, short = 'D', conflicts_with = "field")]
     pub data: Option<String>,
@@ -96,22 +100,26 @@ pub enum CmdbRelationSub {
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbRelationAddArgs {
-    /// CMDB class name (e.g. `cmdb_ci_linux_server`).
+    /// CMDB class name (e.g. `cmdb_ci_linux_server`), or a combined
+    /// `class:sys_id` / `class:number` reference.
     pub class: String,
-    /// sys_id of the CI.
-    pub sys_id: String,
+    /// sys_id of the CI. Omit when CLASS is a `class:id` reference.
+    pub sys_id: Option<String>,
     #[command(flatten)]
     pub body: BodyArgs,
 }
 
 #[derive(clap::Args, Debug)]
 pub struct CmdbRelationDeleteArgs {
-    /// CMDB class name (e.g. `cmdb_ci_linux_server`).
+    /// CMDB class name (e.g. `cmdb_ci_linux_server`), or a combined
+    /// `class:sys_id` / `class:number` reference.
     pub class: String,
-    /// sys_id of the CI.
-    pub sys_id: String,
-    /// sys_id of the relation to delete.
-    pub rel_sys_id: String,
+    /// sys_id of the CI. With a `class:id` reference this slot holds the
+    /// relation sys_id instead (positionals fill in order).
+    pub sys_id: Option<String>,
+    /// sys_id of the relation to delete. Omit when CLASS is a `class:id`
+    /// reference — the relation then sits one slot earlier.
+    pub rel_sys_id: Option<String>,
     /// Skip confirmation prompt (required for non-interactive use).
     #[arg(long, short = 'y')]
     pub yes: bool,
@@ -133,8 +141,10 @@ pub fn list(global: &GlobalFlags, args: CmdbListArgs) -> Result<()> {
 }
 
 pub fn get(global: &GlobalFlags, args: CmdbGetArgs) -> Result<()> {
+    let r = record_ref::parse_pair(&args.class, args.sys_id.as_deref(), "class")?;
     let client = connect(global)?;
-    let path = format!("/api/now/cmdb/instance/{}/{}", args.class, args.sys_id);
+    let sys_id = r.resolve(&client)?;
+    let path = format!("/api/now/cmdb/instance/{}/{}", r.table, sys_id);
     let resp = client.get(&path, &[])?;
     emit(global, resp)
 }
@@ -263,12 +273,14 @@ pub fn create(global: &GlobalFlags, args: CmdbCreateArgs) -> Result<()> {
 }
 
 pub fn update(global: &GlobalFlags, args: CmdbUpdateArgs) -> Result<()> {
-    let client = connect(global)?;
-    let path = format!("/api/now/cmdb/instance/{}/{}", args.class, args.sys_id);
+    let r = record_ref::parse_pair(&args.class, args.sys_id.as_deref(), "class")?;
     let body = ire_envelope(
         body::from_flags(args.data, args.field, EmptyBody::Reject)?,
         args.source,
     )?;
+    let client = connect(global)?;
+    let sys_id = r.resolve(&client)?;
+    let path = format!("/api/now/cmdb/instance/{}/{}", r.table, sys_id);
     let resp = client.patch(&path, &[], &body)?;
     emit(global, resp)
 }
@@ -288,28 +300,57 @@ pub fn relation(global: &GlobalFlags, sub: CmdbRelationSub) -> Result<()> {
 }
 
 fn relation_add(global: &GlobalFlags, args: CmdbRelationAddArgs) -> Result<()> {
-    let client = connect(global)?;
-    let path = format!(
-        "/api/now/cmdb/instance/{}/{}/relation",
-        args.class, args.sys_id
-    );
+    let r = record_ref::parse_pair(&args.class, args.sys_id.as_deref(), "class")?;
     let body = args.body.build(EmptyBody::Reject)?;
+    let client = connect(global)?;
+    let sys_id = r.resolve(&client)?;
+    let path = format!("/api/now/cmdb/instance/{}/{}/relation", r.table, sys_id);
     let resp = client.post(&path, &[], &body)?;
     emit(global, resp)
 }
 
 fn relation_delete(global: &GlobalFlags, args: CmdbRelationDeleteArgs) -> Result<()> {
-    confirm_delete(
-        args.yes,
-        &format!(
-            "relation {} on {}/{}",
-            args.rel_sys_id, args.class, args.sys_id
-        ),
-    )?;
+    // Three positionals fill in order, so a `class:id` reference shifts the
+    // relation sys_id one slot earlier. Which reading applies is decided by the
+    // first token's shape, never guessed from arity alone.
+    let (target, rel_sys_id) = if args.class.contains(':') {
+        match (args.sys_id, args.rel_sys_id) {
+            (Some(rel), None) => (record_ref::parse_ref(&args.class, "class")?, rel),
+            (Some(_), Some(_)) => {
+                return Err(Error::Usage(
+                    "give the CI once: either `<CLASS> <SYS_ID> <REL_SYS_ID>` or a \
+                     combined `<CLASS>:<ID> <REL_SYS_ID>`, not both"
+                        .into(),
+                ))
+            }
+            (None, _) => {
+                return Err(Error::Usage(
+                    "missing REL_SYS_ID: pass `<CLASS>:<ID> <REL_SYS_ID>`".into(),
+                ))
+            }
+        }
+    } else {
+        match (args.sys_id, args.rel_sys_id) {
+            (Some(sys_id), Some(rel)) => (
+                record_ref::parse_pair(&args.class, Some(&sys_id), "class")?,
+                rel,
+            ),
+            _ => {
+                return Err(Error::Usage(
+                    "missing SYS_ID and/or REL_SYS_ID: pass `<CLASS> <SYS_ID> \
+                     <REL_SYS_ID>` or a combined `<CLASS>:<ID> <REL_SYS_ID>`"
+                        .into(),
+                ))
+            }
+        }
+    };
+    validate_sys_id(&rel_sys_id)?;
+    confirm_delete(args.yes, &format!("relation {rel_sys_id} on {target}"))?;
     let client = connect(global)?;
+    let sys_id = target.resolve(&client)?;
     let path = format!(
         "/api/now/cmdb/instance/{}/{}/relation/{}",
-        args.class, args.sys_id, args.rel_sys_id
+        target.table, sys_id, rel_sys_id
     );
     client.delete(&path, &[])?;
     Ok(())

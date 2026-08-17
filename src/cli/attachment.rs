@@ -1,4 +1,5 @@
 use crate::cli::kernel::{confirm_delete, connect, emit, write_response};
+use crate::cli::record_ref;
 use crate::cli::{GlobalFlags, Paging};
 use crate::client::{Download, DownloadError};
 use crate::error::{Error, Result};
@@ -39,10 +40,12 @@ pub struct AttachmentGetArgs {
 
 #[derive(clap::Args, Debug)]
 pub struct AttachmentUploadArgs {
-    /// Table to attach to (e.g. `incident`).
-    #[arg(long, required = true)]
-    pub table: String,
-    /// sys_id of the record to attach to.
+    /// Table to attach to (e.g. `incident`). Optional when --record is a
+    /// `table:id` reference.
+    #[arg(long)]
+    pub table: Option<String>,
+    /// sys_id of the record to attach to, or a combined `table:sys_id` /
+    /// `table:number` reference (e.g. `incident:INC0010001`).
     #[arg(long, required = true)]
     pub record: String,
     /// Path to the file to upload.
@@ -105,7 +108,9 @@ pub fn get(global: &GlobalFlags, args: AttachmentGetArgs) -> Result<()> {
 }
 
 pub fn upload(global: &GlobalFlags, args: AttachmentUploadArgs) -> Result<()> {
+    let r = record_ref::parse_flag_pair(args.table.as_deref(), &args.record)?;
     let client = connect(global)?;
+    let sys_id = r.resolve(&client)?;
     let file_path = Path::new(&args.file);
     let file_name = args.file_name.unwrap_or_else(|| {
         file_path
@@ -120,8 +125,8 @@ pub fn upload(global: &GlobalFlags, args: AttachmentUploadArgs) -> Result<()> {
     let body =
         std::fs::read(file_path).map_err(|e| Error::Usage(format!("read {}: {e}", args.file)))?;
     let mut query: Vec<(String, String)> = vec![
-        ("table_name".into(), args.table),
-        ("table_sys_id".into(), args.record),
+        ("table_name".into(), r.table),
+        ("table_sys_id".into(), sys_id),
         ("file_name".into(), file_name),
     ];
     if let Some(v) = args.encryption_context {

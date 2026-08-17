@@ -140,7 +140,7 @@ fn usage_puts_options_last() {
         .success();
     let stdout = String::from_utf8(out.get_output().stdout.clone()).unwrap();
     assert!(
-        stdout.contains("Usage: sn table get <TABLE> <SYS_ID> [OPTIONS]"),
+        stdout.contains("Usage: sn table get <TABLE> [SYS_ID] [OPTIONS]"),
         "usage line not reordered:\n{stdout}"
     );
 }

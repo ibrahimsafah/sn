@@ -130,7 +130,7 @@ envelope is what you need.
 ```bash
 # Stream changes to matching records. Bound the stream, or it runs until you stop it.
 sn watch incident --query "priority=1^active=true" --max-events 5
-sn watch incident --sys-id <SYS_ID> --duration 60           # stop after 60s
+sn watch incident --query "sys_id=<SYS_ID>" --duration 60   # one record, stop after 60s
 sn watch incident --query "active=true" --idle-timeout 30   # stop after 30s of quiet
 
 # Narrow it down
@@ -149,12 +149,12 @@ sn watch incident --query "active=true" --on-change state,priority  # only these
            "sys_updated_by":{"display_value":"abeyahmad","value":"abeyahmad"}}}
 ```
 
-What an event does **not** carry is any field that *didn't* change: an event about `urgency` has no `number` and no `assigned_to`, because nobody wrote them. **`--hydrate`** fetches the whole row for each event (one Table API read) and puts it in `record` instead — reach for it when you need fields nobody touched. `--fields` narrows that fetch and `--display-value` resolves references; both require `--hydrate`. Note a hydrated row is current as of the *fetch*, not the event.
+What an event does **not** carry is any field that *didn't* change: an event about `urgency` has no `number` and no `assigned_to`, because nobody wrote them. When you need a field nobody touched, read it explicitly — `sn table get incident <sys_id> --fields "number,assigned_to"` — which keeps the extra call visible and reads the row when *you* ask, not mid-stream. (A `--hydrate` flag used to do this per event; it was removed in 0.13.0 because a fetched row is current as of the fetch, not the event, so back-to-back writes hydrated the first event with the second's values.)
 
 Worth knowing:
 
 - **`changes` includes derived fields.** Writing `urgency` also reports `priority`, because ServiceNow recomputes it.
-- **Inserts list every populated field** in `changes`, so an insert's `record` is the whole new row. **Deletes carry `changes: []`**, so `--on-change` never matches a delete — and no `record`, since there is nothing left to report (under `--hydrate` a delete emits `record: null` instead of attempting a doomed fetch).
+- **Inserts list every populated field** in `changes`, so an insert's `record` is the whole new row. **Deletes carry `changes: []`**, so `--on-change` never matches a delete — and no `record`, since there is nothing left to report.
 - Ctrl-C exits 0. Works with both basic and OAuth/SSO profiles.
 - `--insecure` and `--ca-cert` are honored. **Proxies are not supported**: a profile with a proxy configured exits 1 rather than connecting around it.
 

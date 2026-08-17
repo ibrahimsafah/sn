@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Breaking
+
+- `sn watch` targets with `-q <QUERY>` alone. `--sys-id` is removed — write `-q "sys_id=<SYS_ID>"`. `--hydrate`, `--fields` and `--display-value` are removed with no replacement: an event already carries every changed field's new value as a `{display_value, value}` pair, and a hydrated row was the row as of the fetch, so back-to-back writes hydrated the first event with the second's values. Read fields the write didn't touch with `sn table get`.
+
 ### Added
 
 - `sn context` shows the instance-side session context — the application scope and update set the caller's tracked writes are captured under — in one API round trip. `sn context scope <name|sys_id>` and `sn context updateset <name|sys_id>` switch them, verified by re-read. A stale update-set preference is reported (`source`, `preference_stale`) rather than silently healed.

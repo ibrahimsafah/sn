@@ -180,7 +180,7 @@ Transport gaps: the socket is opened directly rather than through reqwest, so it
 
 Guards live in `tests/introspect.rs` (no node named `help`, unique command paths, globals not duplicated, builtins gone but `app install --version` intact). Note that `tests/cli_surface.rs::every_argument_has_help_text` walks this tree: it chains the root's `global_args`, because checking `args` alone would silently stop covering 11 flags rather than fail.
 
-Four places document this schema by hand and must move together: `.claude/skills/sn.md`, `skills/sn/SKILL.md`, `docs/agent-guide.md`, and `docs/agent-integration.md` (the README links there but carries no schema detail itself).
+Two places document this schema by hand and must move together: `docs/agent-guide.md` and `docs/agent-integration.md` (the README links there but carries no schema detail itself). The agent skills used to restate it and deliberately no longer do — anything `sn introspect --help` and these docs already cover was cut from them, because a hand-copy of a machine-readable contract is a second source of truth that silently goes stale.
 
 ### Profile resolution precedence
 
@@ -281,7 +281,9 @@ Resolved by `config::config_dir()`. A non-empty `SN_CONFIG_DIR` is used as-is �
 
 ## Claude Code plugin
 
-This repo is also a Claude Code plugin and its own marketplace (`.claude-plugin/plugin.json` + `marketplace.json` + `skills/sn/SKILL.md`). The plugin skill mirrors `.claude/skills/sn.md` but adds `allowed-tools: Bash(sn *)` for auto-approved CLI access — keep the two files in sync. `.claude/skills/sn.md` is for in-repo use (`/sn`); `skills/sn/SKILL.md` is for external distribution.
+This repo is also a Claude Code plugin and its own marketplace (`.claude-plugin/plugin.json` + `marketplace.json` + `skills/sn/`). The skill is a directory — `SKILL.md` plus `references/{shapes-queries,change,watch,cicd}.md` — loaded progressively: `SKILL.md` is always in context when the skill fires, the references only when it points at one. `.claude/skills/sn/` is the in-repo copy (`/sn`); `skills/sn/` is for external distribution and is **identical except for the `allowed-tools: Bash(sn *)` line**, which auto-approves CLI calls for installed users. Keep all ten files in sync; `diff -r` the two trees.
+
+**The skill documents what `--help` cannot, and nothing else.** Measured against a no-skill baseline across ten A/B runs, an agent with only the CLI matched an agent with the old 1,041-line skill on every task, because this CLI's help and its self-naming errors already teach the flags (`sn cmdb create --help` carries the IRE envelope, the Java String cast *and* the `source` ambiguity). What a skill can add is the *instance's* behavior, which no help text can reach: response shapes (`change` wrapping every field, `cmdb` nesting under `.attributes`, the `__meta` element, aggregate's sibling `groupby_fields`), silently dropped query terms, exit 4 meaning a missing role rather than a bad credential, and the CICD status contract. When adding to the skill, the test is: *can the binary teach this at the moment of need?* If yes — help text, a self-naming error, or validation the CLI already performs — leave it out.
 
 ## CI/CD
 

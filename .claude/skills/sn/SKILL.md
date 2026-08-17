@@ -1,7 +1,6 @@
 ---
 name: sn
 description: Run ServiceNow operations through the `sn` CLI — read and write incidents, changes, problems, requests, CMDB CIs, catalog items, attachments, journal comments, update sets and ATF runs against the user's instance. Use whenever the user says sn, ServiceNow or SNOW, names an instance, pastes a record number (INC…, CHG…, RITM…, PRB…, TASK…), asks to look up or file or update a ticket, wants live record updates, or asks a question whose answer lives in a ServiceNow table.
-allowed-tools: Bash(sn *)
 ---
 
 # sn — ServiceNow from the command line

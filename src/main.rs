@@ -2,7 +2,8 @@ use clap::error::ErrorKind;
 use is_terminal::IsTerminal;
 use sn::cli::{
     ApiSub, AppSub, AtfSub, AttachmentSub, AuthSub, CatalogSub, ChangeSub, Cli, CmdbSub, Command,
-    IdentifySub, ImportSub, SchemaSub, ScoresSub, TableSub, UpdateSetSub, UserSub, VariablesSub,
+    ContextSub, IdentifySub, ImportSub, SchemaSub, ScoresSub, TableSub, UpdateSetSub, UserSub,
+    VariablesSub,
 };
 use sn::error::Result;
 use sn::output::emit_error;
@@ -118,6 +119,11 @@ fn run(cli: Cli) -> Result<()> {
                 sn::cli::update_set::commit_multiple(&global, args)
             }
             UpdateSetSub::BackOut(args) => sn::cli::update_set::back_out(&global, args),
+        },
+        Command::Context { sub } => match sub {
+            None => sn::cli::context::show(&global),
+            Some(ContextSub::Scope(args)) => sn::cli::context::set_scope(&global, args),
+            Some(ContextSub::Updateset(args)) => sn::cli::context::set_updateset(&global, args),
         },
         Command::Atf { sub } => match sub {
             AtfSub::Run(args) => sn::cli::atf::run(&global, args),

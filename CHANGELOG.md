@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- `sn context` shows the instance-side session context — the application scope and update set the caller's tracked writes are captured under — in one API round trip. `sn context scope <name|sys_id>` and `sn context updateset <name|sys_id>` switch them, verified by re-read. A stale update-set preference is reported (`source`, `preference_stale`) rather than silently healed.
+
 ### Fixed
 
 - `sn watch` no longer loses events to the instance's session reaper. The watcher replaces its session every 45 seconds (`--session-rotate <SECS>`, 0 disables) with a make-before-break handoff: the replacement subscribes before the old session disconnects, the old socket is drained, and the overlap is deduplicated. A routine reap opens no gap and writes no marker; markers now indicate genuine failures only.

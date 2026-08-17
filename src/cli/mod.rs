@@ -9,6 +9,7 @@ pub mod catalog;
 pub mod change;
 pub mod cmdb;
 pub mod completion;
+pub mod context;
 pub mod graphql;
 pub mod identify;
 pub mod import;
@@ -56,6 +57,7 @@ pub use cmdb::{
     CmdbRelationDeleteArgs, CmdbRelationSub, CmdbSub, CmdbUpdateArgs,
 };
 pub use completion::{CompletionArgs, Shell as CompletionShell};
+pub use context::{ContextSub, ContextTargetArgs};
 pub use graphql::GraphqlArgs;
 pub use identify::{IdentifyArgs, IdentifyEnhancedArgs, IdentifySub};
 pub use import::{ImportBulkArgs, ImportCreateArgs, ImportGetArgs, ImportSub};
@@ -223,7 +225,13 @@ fn with_usage(cmd: clap::Command, path: &str) -> clap::Command {
 fn usage_line(path: &str, cmd: &clap::Command) -> String {
     let mut usage = String::from(path);
     if cmd.get_subcommands().next().is_some() {
-        usage.push_str(" <COMMAND>");
+        // A group whose bare invocation is itself a command (`sn context`)
+        // has an optional subcommand; promise `[COMMAND]`, not `<COMMAND>`.
+        usage.push_str(if cmd.is_subcommand_required_set() {
+            " <COMMAND>"
+        } else {
+            " [COMMAND]"
+        });
         return usage;
     }
     for arg in cmd.get_positionals() {
@@ -381,6 +389,12 @@ pub enum Command {
     UpdateSet {
         #[command(subcommand)]
         sub: UpdateSetSub,
+    },
+    /// Instance-side session context: the application scope and update set the
+    /// caller's tracked writes are captured under. Bare `sn context` shows it.
+    Context {
+        #[command(subcommand)]
+        sub: Option<ContextSub>,
     },
     /// Aggregate statistics for a table (GET /api/now/stats/{table}).
     Aggregate(AggregateArgs),

@@ -639,6 +639,44 @@ sn table update incident c7d8e9f0a1b2 --input-display-value --field state="In Pr
 
 On writes, `--fields` narrows only the *response*, never the request body.
 
+## Session context (`context`)
+
+Every tracked write (`sys_script`, `sys_properties`, dictionary, ACLs, …) is
+captured under the API account's **current application scope and update set**
+— per-user, server-side state you otherwise never see over REST. `sn context`
+reads it in one API round trip; the setters move it and verify by re-read.
+
+```bash
+sn context                                  # where would my tracked writes land?
+```
+```json
+{"scope":{"sys_id":"global","name":"Global","scope":"global"},
+ "update_set":{"sys_id":"0c4d…a438","name":"Default","source":"preference"}}
+```
+
+```bash
+sn context scope x_myapp_scope              # by scope name, display name, or sys_id
+sn context updateset "Sprint 12 fixes"      # by name or sys_id; in-progress, current scope only
+```
+
+Setters report the full new context plus a `previous` block. Switching scope
+also moves the update set to the target scope's remembered (or default) set —
+the same coupling the UI pickers apply.
+
+- `source` names how the current update set was resolved: `preference` (the
+  raw preference, agreeing with the scope), `scope-memory` (the scope's
+  remembered set), or `scope-default`. Anything but `preference` comes with
+  `preference_stale: true` — the raw preference points at another scope's set
+  and the next picker interaction would heal it; `sn context updateset <name>`
+  heals it explicitly. `update_set: null` plus a `note` means nothing
+  resolved for the scope.
+- **This surface needs scope/update-set read access** (admin or delegated
+  developer). For a plain `itil` account the row ACLs return empty results,
+  which the command reports as an explicit error (exit 2) instead of a
+  fabricated context.
+- A cross-scope or completed update set is refused with the reason; only
+  in-progress sets in the current scope are selectable, matching the UI.
+
 ## Shared parameter reference
 
 Friendly flags map to ServiceNow `sysparm_*` params; both names work. These

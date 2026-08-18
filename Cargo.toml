@@ -2,7 +2,7 @@
 name = "sn"
 version = "0.13.0"
 authors = ["Abey Ahmad <ibrahimsafah@gmail.com>"]
-edition = "2021"
+edition = "2024"
 rust-version = "1.88"
 description = "Agent-forward CLI for ServiceNow — Table, Change, CMDB, Attachment, Catalog, Import, CICD, and more"
 license = "MIT"

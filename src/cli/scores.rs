@@ -1,7 +1,7 @@
-use crate::cli::{DisplayValueArg, DisplayValueOpt, GlobalFlags, ADVANCED};
+use crate::cli::{ADVANCED, DisplayValueArg, DisplayValueOpt, GlobalFlags};
 use crate::error::Result;
 use clap::{Subcommand, ValueEnum};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::kernel::{connect, emit, unwrap_or_raw, write_response};
 

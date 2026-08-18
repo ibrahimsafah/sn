@@ -1,6 +1,6 @@
 mod common;
 
-use common::{sn_cmd, write_profiles, ProfileSpec};
+use common::{ProfileSpec, sn_cmd, write_profiles};
 use wiremock::matchers::{method, path};
 use wiremock::{Mock, ResponseTemplate};
 

@@ -145,7 +145,7 @@ fn build_variables(variables: Option<&str>, vars: &[String]) -> Result<Option<Va
                 _ => {
                     return Err(Error::Usage(
                         "--variables must be a JSON object at the top level".into(),
-                    ))
+                    ));
                 }
             }
         }

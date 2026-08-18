@@ -1,6 +1,6 @@
 mod common;
 
-use common::{sn_cmd, write_oauth_profile, write_profiles, ProfileSpec};
+use common::{ProfileSpec, sn_cmd, write_oauth_profile, write_profiles};
 use serde_json::json;
 use sn::config::now_unix;
 use wiremock::matchers::{basic_auth, method, path, query_param};

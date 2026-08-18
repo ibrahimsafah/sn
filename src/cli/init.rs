@@ -1,7 +1,7 @@
-use crate::cli::profile::{
-    resolve_input, resolve_name, save_and_verify, Caller, ProfileAddArgs, SavePolicy,
-};
 use crate::cli::GlobalFlags;
+use crate::cli::profile::{
+    Caller, ProfileAddArgs, SavePolicy, resolve_input, resolve_name, save_and_verify,
+};
 use crate::config::{AuthMethod, OAuthGrant};
 use crate::error::Result;
 

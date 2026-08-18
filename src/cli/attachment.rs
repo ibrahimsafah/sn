@@ -341,7 +341,7 @@ fn mime_from_extension(path: &Path) -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::{temp_file_name, truncate_bytes, MAX_STAGING_NAME};
+    use super::{MAX_STAGING_NAME, temp_file_name, truncate_bytes};
     use std::path::Path;
 
     #[test]

@@ -144,10 +144,10 @@ fn implied_verb_argv(
     // clap matched the token against a real verb by edit distance, so this is a
     // misspelling (`sn table lst incident`), not a table name. Leave its "did
     // you mean" intact rather than firing a GET at a table called `lst`.
-    if let Some(ContextValue::Strings(near)) = err.get(ContextKind::SuggestedSubcommand) {
-        if !near.is_empty() {
-            return Vec::new();
-        }
+    if let Some(ContextValue::Strings(near)) = err.get(ContextKind::SuggestedSubcommand)
+        && !near.is_empty()
+    {
+        return Vec::new();
     }
     let Some(ContextValue::String(token)) = err.get(ContextKind::InvalidSubcommand) else {
         return Vec::new();

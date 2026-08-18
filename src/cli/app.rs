@@ -130,7 +130,7 @@ pub fn rollback(global: &GlobalFlags, args: AppRollbackArgs) -> Result<()> {
         (None, None) => {
             return Err(Error::Usage(
                 "either --sys-id or --scope is required".into(),
-            ))
+            ));
         }
     };
     // Replaces the installed application on the whole instance with an older

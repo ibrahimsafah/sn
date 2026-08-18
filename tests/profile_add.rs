@@ -9,8 +9,8 @@
 
 mod common;
 
-use common::{sn_cmd, write_profiles, ProfileSpec};
-use serde_json::{json, Value};
+use common::{ProfileSpec, sn_cmd, write_profiles};
+use serde_json::{Value, json};
 use std::path::Path;
 use wiremock::matchers::{
     basic_auth, body_string_contains, header, method, path as wm_path, query_param,

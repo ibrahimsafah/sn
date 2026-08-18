@@ -1,10 +1,10 @@
-use crate::cli::auth::{identify, non_empty, Identity};
-use crate::cli::kernel::{build_client, build_profile, write_response};
 use crate::cli::GlobalFlags;
+use crate::cli::auth::{Identity, identify, non_empty};
+use crate::cli::kernel::{build_client, build_profile, write_response};
 use crate::client::Client;
 use crate::error::{Error, Result};
 use crate::observability;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::time::Instant;
 
 /// Undocumented. The only endpoint that reports the caller's *privilege* and

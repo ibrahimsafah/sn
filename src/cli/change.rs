@@ -1,6 +1,6 @@
 use crate::body::EmptyBody;
 use crate::cli::kernel::{confirm_delete, confirm_destructive, connect, emit};
-use crate::cli::{BodyArgs, DisplayValueOpt, GlobalFlags, OutputMode, Paging, SetLimit, ADVANCED};
+use crate::cli::{ADVANCED, BodyArgs, DisplayValueOpt, GlobalFlags, OutputMode, Paging, SetLimit};
 use crate::error::{Error, Result};
 use clap::{Subcommand, ValueEnum};
 use serde_json::Value;
@@ -464,10 +464,10 @@ fn sort_clause(query: &str) -> Option<&str> {
 fn emit_list(global: &GlobalFlags, mut resp: Value) -> Result<()> {
     if let Some(meta) = trailing_meta(&resp) {
         warn_ignored_fields(meta);
-        if global.output != OutputMode::Raw {
-            if let Some(arr) = resp.get_mut("result").and_then(Value::as_array_mut) {
-                arr.pop();
-            }
+        if global.output != OutputMode::Raw
+            && let Some(arr) = resp.get_mut("result").and_then(Value::as_array_mut)
+        {
+            arr.pop();
         }
     }
     emit(global, resp)

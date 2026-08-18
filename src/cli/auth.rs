@@ -1,14 +1,14 @@
-use crate::cli::kernel::{build_client, build_profile, write_response};
 use crate::cli::GlobalFlags;
+use crate::cli::kernel::{build_client, build_profile, write_response};
 use crate::client::Client;
 use crate::config::{
-    clear_oauth_tokens, config_path, load_config_from, now_unix, resolve_profile_name,
-    save_oauth_tokens, AuthMethod, OAuthGrant, ResolvedProfile,
+    AuthMethod, OAuthGrant, ResolvedProfile, clear_oauth_tokens, config_path, load_config_from,
+    now_unix, resolve_profile_name, save_oauth_tokens,
 };
 use crate::error::{Error, Result};
 use crate::oauth;
 use crate::observability::log_note;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 /// Pure session command: run the OAuth flow for an already-configured OAuth
 /// profile and cache the tokens. Configuration lives in `sn profile add` /
@@ -23,7 +23,7 @@ pub fn login(global: &GlobalFlags) -> Result<()> {
         _ => {
             return Err(Error::Usage(format!(
                 "profile '{name}' does not use oauth; run `sn init`"
-            )))
+            )));
         }
     };
 

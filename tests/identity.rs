@@ -13,8 +13,8 @@
 
 mod common;
 
-use common::{sn_cmd, write_profiles, ProfileSpec};
-use serde_json::{json, Value};
+use common::{ProfileSpec, sn_cmd, write_profiles};
+use serde_json::{Value, json};
 use wiremock::matchers::{method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

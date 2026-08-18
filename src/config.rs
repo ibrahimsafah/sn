@@ -186,10 +186,10 @@ pub struct ProfileCredentials {
 /// `credentials.toml` (no `sn` subdirectory is appended). Otherwise the
 /// platform-native location from `directories::ProjectDirs` is used.
 pub fn config_dir() -> Result<PathBuf> {
-    if let Ok(dir) = std::env::var("SN_CONFIG_DIR") {
-        if !dir.is_empty() {
-            return Ok(PathBuf::from(dir));
-        }
+    if let Ok(dir) = std::env::var("SN_CONFIG_DIR")
+        && !dir.is_empty()
+    {
+        return Ok(PathBuf::from(dir));
     }
     ProjectDirs::from("", "", "sn")
         .map(|pd| pd.config_dir().to_path_buf())
@@ -477,7 +477,7 @@ fn lock_dir(dir: &Path, timeout: Duration) -> Result<File> {
             Ok(()) => return Ok(file),
             Err(fs4::TryLockError::WouldBlock) => {}
             Err(fs4::TryLockError::Error(e)) => {
-                return Err(Error::Config(format!("lock {}: {e}", path.display())))
+                return Err(Error::Config(format!("lock {}: {e}", path.display())));
             }
         }
         if Instant::now() >= deadline {
@@ -1222,10 +1222,12 @@ mod resolution_tests {
             Ok(())
         })
         .unwrap();
-        assert!(load_credentials_from(&path)
-            .unwrap()
-            .profiles
-            .contains_key("nested"));
+        assert!(
+            load_credentials_from(&path)
+                .unwrap()
+                .profiles
+                .contains_key("nested")
+        );
     }
 
     #[test]

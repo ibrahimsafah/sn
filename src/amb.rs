@@ -34,16 +34,16 @@
 //!    checks it and raises an auth error, because the alternative is a client
 //!    that reports "connected" and then silently receives nothing forever.
 
-use crate::error::{Error, Result, NO_HTTP_STATUS};
+use crate::error::{Error, NO_HTTP_STATUS, Result};
 use crate::observability::{log_body, log_request};
-use base64::engine::general_purpose::STANDARD as BASE64;
 use base64::Engine;
+use base64::engine::general_purpose::STANDARD as BASE64;
 use rustls::client::danger::{HandshakeSignatureValid, ServerCertVerified, ServerCertVerifier};
 use rustls::crypto::CryptoProvider;
 use rustls::{DigitallySignedStruct, SignatureScheme};
 use rustls_pki_types::pem::PemObject;
 use rustls_pki_types::{CertificateDer, ServerName, UnixTime};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::ErrorKind;
 use std::net::{TcpStream, ToSocketAddrs};
 use std::sync::Arc;
@@ -151,7 +151,7 @@ fn read_ca_pem(path: &str) -> Result<Vec<CertificateDer<'static>>> {
             Err(e) if certs.is_empty() => {
                 return Err(Error::Config(format!(
                     "no certificates found in CA cert '{path}': {e}"
-                )))
+                )));
             }
             Err(_) => break,
         }
@@ -326,17 +326,17 @@ impl Amb {
         // handshake is also "successful" and also hands back a clientId. Only
         // this field distinguishes them, and only here — by /meta/subscribe the
         // failure has degraded into `404::message_deleted`.
-        if let Some(status) = session_status(&reply) {
-            if status != SESSION_LOGGED_IN {
-                return Err(Error::Auth {
-                    status: 401,
-                    message: format!(
-                        "ServiceNow rejected the AMB session ({status}); \
+        if let Some(status) = session_status(&reply)
+            && status != SESSION_LOGGED_IN
+        {
+            return Err(Error::Auth {
+                status: 401,
+                message: format!(
+                    "ServiceNow rejected the AMB session ({status}); \
                          the websocket authenticates by session cookie, not by credentials"
-                    ),
-                    transaction_id: None,
-                });
-            }
+                ),
+                transaction_id: None,
+            });
         }
 
         if reply.get("successful").and_then(Value::as_bool) != Some(true) {
@@ -435,13 +435,14 @@ impl Amb {
                 } else {
                     self.rearm()?;
                 }
-            } else if !channel.starts_with("/meta/") && !channel.is_empty() {
-                if let Some(data) = msg.get("data") {
-                    events.push(Event {
-                        channel: channel.to_string(),
-                        data: data.clone(),
-                    });
-                }
+            } else if !channel.starts_with("/meta/")
+                && !channel.is_empty()
+                && let Some(data) = msg.get("data")
+            {
+                events.push(Event {
+                    channel: channel.to_string(),
+                    data: data.clone(),
+                });
             }
         }
         match death {
@@ -526,11 +527,11 @@ impl Amb {
                     Message::Ping(_) | Message::Pong(_) | Message::Binary(_) | Message::Frame(_),
                 ) => continue,
                 Ok(Message::Close(_)) => {
-                    return Err(Error::Transport("amb websocket closed by server".into()))
+                    return Err(Error::Transport("amb websocket closed by server".into()));
                 }
                 Err(tungstenite::Error::Io(e)) if is_timeout(&e) => return Ok(None),
                 Err(tungstenite::Error::ConnectionClosed | tungstenite::Error::AlreadyClosed) => {
-                    return Err(Error::Transport("amb websocket closed".into()))
+                    return Err(Error::Transport("amb websocket closed".into()));
                 }
                 Err(e) => return Err(Error::Transport(format!("amb websocket: {e}"))),
             }
@@ -600,7 +601,7 @@ fn endpoint(base_url: &str) -> Result<(String, String, u16, String)> {
         other => {
             return Err(Error::Config(format!(
                 "instance URL has unsupported scheme '{other}'"
-            )))
+            )));
         }
     };
     let hostport = rest.split('/').next().unwrap_or(rest);
@@ -731,22 +732,26 @@ mod tests {
         // Every path builds its own connector, so the trust store can never
         // silently depend on which flags were passed.
         assert!(tls_connector(&TlsOptions::default()).is_ok());
-        assert!(tls_connector(&TlsOptions {
-            insecure: true,
-            ca_cert: None,
-        })
-        .is_ok());
+        assert!(
+            tls_connector(&TlsOptions {
+                insecure: true,
+                ca_cert: None,
+            })
+            .is_ok()
+        );
     }
 
     #[test]
     fn insecure_overrides_a_ca_cert_and_never_reads_it() {
         // Nothing is verified, so the custom root has no one to convince; the
         // path must not even be opened, or --insecure would fail on a bad path.
-        assert!(tls_connector(&TlsOptions {
-            insecure: true,
-            ca_cert: Some("/nonexistent/nope.pem".into()),
-        })
-        .is_ok());
+        assert!(
+            tls_connector(&TlsOptions {
+                insecure: true,
+                ca_cert: Some("/nonexistent/nope.pem".into()),
+            })
+            .is_ok()
+        );
     }
 
     /// `Connector` is not `Debug`, so `unwrap_err()` cannot format the Ok side.

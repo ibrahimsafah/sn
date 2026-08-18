@@ -22,7 +22,7 @@
 
 use crate::cli::journal::{validate_identifier, validate_sys_id};
 use crate::client::Client;
-use crate::error::{Error, Result, NO_HTTP_STATUS};
+use crate::error::{Error, NO_HTTP_STATUS, Result};
 use serde_json::Value;
 
 /// A parsed record reference: the table plus either a sys_id or a number.

@@ -118,10 +118,10 @@ fn coerce_field_value(raw: &str) -> Result<Value> {
         return Ok(Value::String(s));
     }
     // Try JSON scalars first (true/false/null/number), fall back to string.
-    if let Ok(v) = serde_json::from_str::<Value>(raw) {
-        if v.is_boolean() || v.is_null() || v.is_number() {
-            return Ok(v);
-        }
+    if let Ok(v) = serde_json::from_str::<Value>(raw)
+        && (v.is_boolean() || v.is_null() || v.is_number())
+    {
+        return Ok(v);
     }
     Ok(Value::String(raw.to_string()))
 }

@@ -22,8 +22,8 @@ use crate::cli::{GlobalFlags, OutputMode};
 use crate::client::{Client, DownloadError};
 use crate::error::{Error, Result};
 use clap::{Subcommand, ValueEnum};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT};
-use serde_json::{json, Map, Value};
+use reqwest::header::{ACCEPT, HeaderMap, HeaderValue};
+use serde_json::{Map, Value, json};
 use std::io::{self, Write};
 
 /// Every namespace, API, version and endpoint on the instance in one response.
@@ -149,10 +149,10 @@ pub fn search(global: &GlobalFlags, args: ApiSearchArgs) -> Result<()> {
                 || contains(str_field(api, "apiName"), &needle)
                 || contains(str_field(api, "description"), &needle);
             for (version, resource) in resources(api) {
-                if let Some(m) = &wanted_method {
-                    if !str_field(resource, "httpMethod").eq_ignore_ascii_case(m) {
-                        continue;
-                    }
+                if let Some(m) = &wanted_method
+                    && !str_field(resource, "httpMethod").eq_ignore_ascii_case(m)
+                {
+                    continue;
                 }
                 if !api_hit
                     && !contains(str_field(resource, "route"), &needle)

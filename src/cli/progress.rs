@@ -116,14 +116,14 @@ pub(crate) fn wait_for_completion(
                         eprintln!("sn: progress {pct}%");
                     }
                 }
-                if let Some(d) = deadline {
-                    if std::time::Instant::now() >= d {
-                        return Err(Error::Transport(format!(
-                            "--wait timed out after {}s; operation still running, poll with `sn progress {}`",
-                            wait_timeout.unwrap_or_default(),
-                            progress_id
-                        )));
-                    }
+                if let Some(d) = deadline
+                    && std::time::Instant::now() >= d
+                {
+                    return Err(Error::Transport(format!(
+                        "--wait timed out after {}s; operation still running, poll with `sn progress {}`",
+                        wait_timeout.unwrap_or_default(),
+                        progress_id
+                    )));
                 }
                 std::thread::sleep(std::time::Duration::from_secs(2));
             }

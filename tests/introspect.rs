@@ -53,11 +53,13 @@ fn introspect_reports_flags_and_options_accurately() {
     let setlimit = find_arg(args, "setlimit");
     assert_eq!(setlimit["takes_value"], true);
     assert_eq!(setlimit["default_values"][0], "1000");
-    assert!(setlimit["aliases"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .any(|a| a == "limit"));
+    assert!(
+        setlimit["aliases"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a == "limit")
+    );
 
     // Positionals are marked so agents don't render them as --flags.
     let table_arg = find_arg(args, "table");

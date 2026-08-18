@@ -31,13 +31,13 @@
 use crate::cli::graphql::{errors_to_api_error, execute, graphql_errors};
 use crate::cli::journal::{self, undefined_field};
 use crate::cli::kernel::{bool_opt, connect, unwrap_or_raw, write_response};
-use crate::cli::record_ref::{parse_get_ref, RecordRef, RefId};
+use crate::cli::record_ref::{RecordRef, RefId, parse_get_ref};
 use crate::cli::variables::{fetch_vars_unchecked, resolve_target};
-use crate::cli::{DisplayValueOpt, GlobalFlags, OutputMode, ADVANCED};
+use crate::cli::{ADVANCED, DisplayValueOpt, GlobalFlags, OutputMode};
 use crate::client::Client;
-use crate::error::{Error, Result, NO_HTTP_STATUS};
+use crate::error::{Error, NO_HTTP_STATUS, Result};
 use crate::query::GetQuery;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(clap::Args, Debug)]
 pub struct GetRecordArgs {

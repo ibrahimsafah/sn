@@ -45,7 +45,7 @@ jobs:
           fi
           piped=$(grep -rnE 'curl[^|]*\|[[:space:]]*(ba)?sh' .github/workflows/ | grep -vE ':[0-9]+:[[:space:]]*#' || true)
           if [ -n "$piped" ]; then
-            printf 'piped installer (curl | sh) in a workflow:\n%s\n' "$piped" >&2
+            printf 'piped installer (curl-to-shell) in a workflow:\n%s\n' "$piped" >&2
             exit 1
           fi
 

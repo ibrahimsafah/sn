@@ -3,7 +3,7 @@ name = "sn"
 version = "0.12.1"
 authors = ["Abey Ahmad <ibrahimsafah@gmail.com>"]
 edition = "2021"
-rust-version = "1.75"
+rust-version = "1.88"
 description = "Agent-forward CLI for ServiceNow — Table, Change, CMDB, Attachment, Catalog, Import, CICD, and more"
 license = "MIT"
 repository = "https://github.com/tehubersheezy/servicenow-cli"
@@ -29,10 +29,10 @@ clap = { version = "4", features = ["derive", "suggestions", "wrap_help", "strin
 reqwest = { version = "0.12", default-features = false, features = ["blocking", "json", "rustls-tls"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-toml = "0.8"
-directories = "5"
+toml = "1"
+directories = "6"
 rpassword = "7"
-thiserror = "1"
+thiserror = "2"
 is-terminal = "0.4"
 clap_complete = "4"
 webbrowser = "1"

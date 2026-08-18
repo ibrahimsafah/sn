@@ -20,3 +20,13 @@ jobs:
       - run: cargo fmt --all -- --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features --workspace
+
+  # Proves the rust-version in Cargo.toml still builds the locked tree.
+  # The 1.75 claim rotted silently because nothing checked it; this does.
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@1.88
+      - uses: Swatinem/rust-cache@v2
+      - run: cargo check --all-features --workspace --locked

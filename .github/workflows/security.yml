@@ -28,7 +28,7 @@ jobs:
     name: cargo audit (RustSec advisories)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       # Install a prebuilt cargo-audit binary rather than compiling it from
       # source (as rustsec/audit-check does) — the from-source build re-fetches
       # the crates.io index every run and was failing intermittently with HTTP2
@@ -42,7 +42,7 @@ jobs:
     name: cargo deny (advisories, bans, licenses, sources)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check all

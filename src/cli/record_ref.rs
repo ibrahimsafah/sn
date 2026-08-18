@@ -19,6 +19,10 @@
 //! never looked up. A record number that happens to be exactly 32 hex chars
 //! would be misclassified; real numbers are prefix+digits and far shorter, and
 //! the escape hatch is `sn table list <t> --query number=<n>`.
+//!
+//! The parse functions and their result types are `pub` (not `pub(crate)`)
+//! only so the out-of-workspace `fuzz/` crate can reach them; nothing outside
+//! this crate should treat them as API.
 
 use crate::cli::journal::{validate_identifier, validate_sys_id};
 use crate::client::Client;
@@ -27,13 +31,13 @@ use serde_json::Value;
 
 /// A parsed record reference: the table plus either a sys_id or a number.
 #[derive(Debug, PartialEq)]
-pub(crate) struct RecordRef {
+pub struct RecordRef {
     pub table: String,
     pub id: RefId,
 }
 
 #[derive(Debug, PartialEq)]
-pub(crate) enum RefId {
+pub enum RefId {
     SysId(String),
     Number(String),
 }
@@ -76,7 +80,7 @@ pub(crate) fn is_sys_id(s: &str) -> bool {
 /// (a table name can never contain one), then validates each half on its own —
 /// the identifier half through the same charset guard every sys_id gets, so
 /// nothing spliced into an encoded query can carry a `:` or a `^`.
-pub(crate) fn parse_ref(token: &str, what: &str) -> Result<RecordRef> {
+pub fn parse_ref(token: &str, what: &str) -> Result<RecordRef> {
     let Some((table, id)) = token.split_once(':') else {
         return Err(Error::Usage(format!(
             "'{token}' is not a {what}:identifier reference"
@@ -100,7 +104,7 @@ pub(crate) fn parse_ref(token: &str, what: &str) -> Result<RecordRef> {
 /// one token must be a combined reference. A ref *and* a second token is
 /// refused rather than picking a winner — either reading loses something
 /// silently.
-pub(crate) fn parse_pair(first: &str, second: Option<&str>, what: &str) -> Result<RecordRef> {
+pub fn parse_pair(first: &str, second: Option<&str>, what: &str) -> Result<RecordRef> {
     match second {
         Some(sys_id) => {
             if first.contains(':') {
@@ -176,7 +180,7 @@ pub(crate) fn table_for_number(number: &str) -> Option<&'static str> {
 /// `sn get`'s REF positional: a `table:identifier` reference or a bare number
 /// with a known prefix. A bare sys_id names no table and is refused rather
 /// than guessed.
-pub(crate) fn parse_get_ref(token: &str) -> Result<RecordRef> {
+pub fn parse_get_ref(token: &str) -> Result<RecordRef> {
     if token.contains(':') {
         return parse_ref(token, "table");
     }

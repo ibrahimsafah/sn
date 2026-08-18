@@ -23,7 +23,7 @@ pub mod ping;
 pub mod profile;
 pub mod progress;
 pub mod raw;
-pub(crate) mod record_ref;
+pub mod record_ref;
 pub mod schema;
 pub mod scores;
 pub mod table;

@@ -65,7 +65,7 @@ jobs:
     outputs:
       body: ${{ steps.e.outputs.body }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - id: e
@@ -83,7 +83,7 @@ jobs:
     env:
       BODY: ${{ needs.emit.outputs.body }}
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
         with:
           persist-credentials: false
       - name: Verdict

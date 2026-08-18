@@ -1808,19 +1808,20 @@ mod tests {
         // The magnitudes buy nothing but margin, and the margin is what the test
         // is: T-Q is the scheduling stall it tolerates in either direction. At
         // 20/30 that was 10ms, and a loaded CI runner expired the first session
-        // before it could drop, leaving one subscribe instead of two. Scale both
-        // together or the property goes with them.
+        // before it could drop, leaving one subscribe instead of two; a loaded
+        // macOS runner then blew through 200/300's 100ms the same way. Scale
+        // both together or the property goes with them.
         let mut s = buffered(None);
         let (result, log) = play(
             Script {
                 attempts: vec![
-                    Attempt::Opens(vec![Step::Quiet(Duration::from_millis(200)), Step::Drop]),
+                    Attempt::Opens(vec![Step::Quiet(Duration::from_millis(400)), Step::Drop]),
                     Attempt::Opens(vec![
-                        Step::Quiet(Duration::from_millis(200)),
+                        Step::Quiet(Duration::from_millis(400)),
                         Step::Deliver(vec![update()]),
                     ]),
                 ],
-                idle: Some(Duration::from_millis(300)),
+                idle: Some(Duration::from_millis(600)),
                 ..Default::default()
             },
             &mut s,

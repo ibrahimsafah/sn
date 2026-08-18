@@ -27,6 +27,27 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test --all-features --workspace
 
+  # allow-dirty = ["ci"] turned off dist's own release.yml drift check, so
+  # nothing else would notice a `dist generate` reverting the SHA pins or
+  # reintroducing a piped installer. This does.
+  action-pins:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - name: Every action pinned by SHA, no piped installers
+        run: |
+          set -eu
+          bad=$(grep -rn "uses:" .github/workflows/ | grep -vE '@[0-9a-f]{40}' || true)
+          if [ -n "$bad" ]; then
+            printf 'action refs not pinned by commit SHA:\n%s\n' "$bad" >&2
+            exit 1
+          fi
+          piped=$(grep -rnE 'curl[^|]*\|[[:space:]]*(ba)?sh' .github/workflows/ | grep -vE ':[0-9]+:[[:space:]]*#' || true)
+          if [ -n "$piped" ]; then
+            printf 'piped installer (curl | sh) in a workflow:\n%s\n' "$piped" >&2
+            exit 1
+          fi
+
   # Proves the rust-version in Cargo.toml still builds the locked tree.
   # The 1.75 claim rotted silently because nothing checked it; this does.
   msrv:

@@ -156,7 +156,7 @@ fn keep_column(col: &Value, args: &SchemaColumnsArgs) -> bool {
         && col
             .get("choices")
             .and_then(|v| v.as_array())
-            .map_or(true, |a| a.is_empty())
+            .is_none_or(|a| a.is_empty())
     {
         return false;
     }

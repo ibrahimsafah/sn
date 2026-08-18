@@ -1,0 +1,35 @@
+# cargo-fuzz harness. Its own [workspace] keeps it out of the root package's
+# workspace on purpose: fuzzing needs nightly and libfuzzer, and nothing in
+# `cargo test --workspace`, clippy, or dist should ever build this crate.
+# Run with: cargo +nightly fuzz run <target> (see .github/workflows/fuzz.yml).
+[package]
+name = "sn-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2021"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+arbitrary = "1"
+
+[dependencies.sn]
+path = ".."
+
+[[bin]]
+name = "record_ref_parse"
+path = "fuzz_targets/record_ref_parse.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "body_from_flags"
+path = "fuzz_targets/body_from_flags.rs"
+test = false
+doc = false
+bench = false
+
+[workspace]

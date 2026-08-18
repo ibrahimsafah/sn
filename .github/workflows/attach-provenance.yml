@@ -1,0 +1,62 @@
+# Attaches the release's build provenance to the release itself.
+#
+# cargo-dist already attests every per-target artifact (actions/
+# attest-build-provenance in release.yml), but those attestations live only in
+# GitHub's attestation store — `gh attestation verify` finds them, release
+# consumers and scanners (OpenSSF Scorecard's Signed-Releases check among
+# them) see only the release assets. This workflow bridges the gap: it pulls
+# each asset's Sigstore bundle from the store, extracts the DSSE envelopes
+# (the in-toto SLSA provenance statements), and uploads them as one
+# `sn-<tag>-provenance.intoto.jsonl` asset.
+#
+# Deliberately a separate workflow rather than a step in release.yml: that
+# file is dist-generated and `dist generate` would silently drop the step.
+name: Attach provenance
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: read
+
+jobs:
+  attach:
+    runs-on: ubuntu-latest
+    permissions:
+      # Uploads the provenance file as a release asset.
+      contents: write
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      TAG: ${{ github.event.release.tag_name }}
+    steps:
+      - name: Download assets, extract provenance, upload
+        run: |
+          set -euo pipefail
+          out="sn-${TAG}-provenance.intoto.jsonl"
+          mkdir assets && cd assets
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY"
+          found=0
+          for f in *; do
+            # Only the per-target archives are attested; installers, checksums
+            # and the formula have no attestation and are skipped by the
+            # download failing. Never reprocess a provenance file itself.
+            case "$f" in *.intoto.jsonl) continue ;; esac
+            if gh attestation download "$f" -R "$GITHUB_REPOSITORY" 2>/dev/null; then
+              for bundle in sha256:*.jsonl; do
+                [ -e "$bundle" ] || continue
+                jq -c '.dsseEnvelope' "$bundle" >> "../$out"
+                rm -f "$bundle"
+                found=1
+              done
+            fi
+          done
+          cd ..
+          # An attested release with nothing extractable is a broken pipeline,
+          # not a no-op — fail loudly rather than publish a release that
+          # silently lost its provenance.
+          if [ "$found" -eq 0 ]; then
+            echo "no attestations found for any asset of $TAG" >&2
+            exit 1
+          fi
+          gh release upload "$TAG" "$out" -R "$GITHUB_REPOSITORY" --clobber

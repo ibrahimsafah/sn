@@ -23,6 +23,11 @@ install-path = "CARGO_HOME"
 install-updater = false
 # Whether to enable GitHub Attestations
 github-attestations = true
+# release.yml is hand-edited on top of the dist output (SHA-pinned actions,
+# job-scoped token permissions, hash-verified installer downloads — see
+# CLAUDE.md "CI/CD"); without this, `dist plan` in the release workflow fails
+# on the drift. Re-running `dist generate` reverts those edits — re-apply them.
+allow-dirty = ["ci"]
 
 # Pin ARM64 Windows builds to a native Windows runner. The default Linux
 # runner can't cross-compile `ring` (TLS dep) to aarch64-pc-windows-msvc

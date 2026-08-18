@@ -1,0 +1,35 @@
+name: Fuzz
+
+on:
+  schedule:
+    # Weekly, Saturday 06:00 UTC — five bounded minutes per target.
+    - cron: "0 6 * * 6"
+  pull_request:
+    paths:
+      - "fuzz/**"
+      - ".github/workflows/fuzz.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  fuzz:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: nightly
+      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+        with:
+          tool: cargo-fuzz
+      - name: Fuzz each target
+        # --target is explicit because cargo-fuzz defaults to the triple *it*
+        # was built for, and taiki-e ships a musl binary — ASan can't link
+        # against static libc, so the default target fails to compile.
+        run: |
+          set -eu
+          for target in record_ref_parse body_from_flags; do
+            cargo +nightly fuzz run "$target" --target x86_64-unknown-linux-gnu -- -max_total_time=300
+          done

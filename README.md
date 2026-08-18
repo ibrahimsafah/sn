@@ -91,6 +91,17 @@ stream record changes while a script runs, and read failures as data instead of 
 
 ## What's new
 
+**0.13.0:** records get addresses. Every `(table, sys_id)` pair now also takes one
+`table:identifier` token — `sn table get incident:INC0010001` — and `sn get <REF>` reads
+a record with its catalog variables and parsed journal in one command (a bare
+`sn get INC0010001` works for the standard prefixes). `sn context` shows — and switches —
+the application scope and update set the session's tracked writes are captured under.
+`sn watch` now rotates its AMB session before the instance can reap it, so a routine reap
+opens no gap. Three breaking changes: `sn auth` is merged into `sn profile`
+(`sn profile login/logout/status/refresh`), `sn watch` targets with `-q` alone
+(`--sys-id`, `--hydrate`, `--fields`, `--display-value` are gone), and building from
+source needs Rust 1.88. Details in the [changelog](CHANGELOG.md).
+
 **0.12.0:** four new command groups. [`sn api`](docs/usage.md#api-discovery) asks the
 instance which REST APIs it actually publishes — every namespace, every endpoint with its
 method and route, and any API's OpenAPI 3 document — so finding an endpoint no longer
@@ -112,12 +123,6 @@ buffer with [`--array`](docs/usage.md#pagination); for raw, drop `--all` and pag
 `catalog cart-empty`, `catalog cart-remove`, `change conflict remove`,
 `updateset back-out`, `app rollback` — refuse to run without `--yes` when stdin is not a
 terminal. Details in the [changelog](CHANGELOG.md).
-
-**0.11.0:** the read verb is optional on `table` and `cmdb` (`sn table incident <SYS_ID>`
-just works — only reads are ever inferred, never a write), `sn raw` takes request headers,
-and `--profile` gets a short `-p`. Three breaking changes: `replace` is gone (use
-`update`), `--display-value` defaults to `true`, and `sn introspect` emits global flags
-once at the root. Details in the [changelog](CHANGELOG.md).
 
 ## Documentation
 

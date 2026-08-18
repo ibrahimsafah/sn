@@ -1,10 +1,6 @@
 # Changelog
 
-## Unreleased
-
-### Breaking
-
-- `sn watch` targets with `-q <QUERY>` alone. `--sys-id` is removed — write `-q "sys_id=<SYS_ID>"`. `--hydrate`, `--fields` and `--display-value` are removed with no replacement: an event already carries every changed field's new value as a `{display_value, value}` pair, and a hydrated row was the row as of the fetch, so back-to-back writes hydrated the first event with the second's values. Read fields the write didn't touch with `sn table get`.
+## 0.13.0 (2026-08-18)
 
 ### Added
 
@@ -15,14 +11,20 @@
 ### Breaking
 
 - `sn auth` is merged into `sn profile`: `login`, `logout`, `status` and `refresh` are now `sn profile <verb>`. Flags and output are unchanged; the `auth` group is gone.
+- `sn watch` targets with `-q <QUERY>` alone. `--sys-id` is removed — write `-q "sys_id=<SYS_ID>"`. `--hydrate`, `--fields` and `--display-value` are removed with no replacement: an event already carries every changed field's new value as a `{display_value, value}` pair, and a hydrated row was the row as of the fetch, so back-to-back writes hydrated the first event with the second's values. Read fields the write didn't touch with `sn table get`.
 - Introspect schema: the `sys_id` positional on the reference-taking commands is now optional, and `attachment upload --table` is no longer required — regenerate any cached agent/MCP schemas.
 - `table get/update/delete` now validate the table name and sys_id (lowercase identifier; sys_id charset) instead of passing arbitrary strings into the URL.
+- Building from source needs Rust 1.88: the declared `rust-version` had lagged what the dependency tree already required; it now matches reality and CI enforces it.
 
 ### Fixed
 
 - `sn change list` (and `models`/`templates`) returns records only: the Change API's trailing `__meta` element is stripped from the array, so `length` matches the record count (`--output raw` keeps it). Query terms the instance silently dropped become a stderr warning naming them.
 - `sn change list -q` refuses `ORDERBY` clauses up front: the Change API silently discards them and returns arbitrary order. The error points at `sn table list change_request`, which sorts correctly.
 - `sn watch` no longer loses events to the instance's session reaper. The watcher replaces its session every 45 seconds (`--session-rotate <SECS>`, 0 disables) with a make-before-break handoff: the replacement subscribes before the old session disconnects, the old socket is drained, and the overlap is deduplicated. A routine reap opens no gap and writes no marker; markers now indicate genuine failures only.
+
+### Security
+
+- `h2` updated past RUSTSEC-2026-0258 (unbounded empty DATA frames, low severity), with the rest of the dependency tree swept to current versions.
 
 ## 0.12.1 (2026-08-13)
 

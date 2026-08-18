@@ -92,10 +92,12 @@ async fn graphql_errors_exit_2_despite_http_200() {
             .code(2);
         let err = String::from_utf8(out.get_output().stderr.clone()).unwrap();
         let v: serde_json::Value = serde_json::from_str(&err).unwrap();
-        assert!(v["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("FieldUndefined"));
+        assert!(
+            v["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("FieldUndefined")
+        );
         // The full errors array rides in sn_error for programmatic consumers.
         assert_eq!(v["error"]["sn_error"][0]["errorType"], "ValidationError");
         assert_eq!(v["error"]["status_code"], 200);

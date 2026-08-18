@@ -441,20 +441,20 @@ pub fn ensure_access_token(profile: &ResolvedProfile, timeout: Option<u64>) -> R
         .as_ref()
         .ok_or_else(|| Error::Config("oauth profile missing oauth config".into()))?;
 
-    if let Some(tok) = &o.tokens {
-        if !tok.is_expired(REFRESH_SKEW_SECS) {
-            return Ok(tok.access_token.clone());
-        }
+    if let Some(tok) = &o.tokens
+        && !tok.is_expired(REFRESH_SKEW_SECS)
+    {
+        return Ok(tok.access_token.clone());
     }
 
     config::with_config_lock_for(refresh_lock_timeout(timeout), || {
         // Re-read under the lock. `o.tokens` is this invocation's snapshot from
         // before it started waiting; the file is the truth now.
         let cached = config::load_oauth_tokens(&profile.name)?;
-        if let Some(tok) = &cached {
-            if !tok.is_expired(REFRESH_SKEW_SECS) {
-                return Ok(tok.access_token.clone());
-            }
+        if let Some(tok) = &cached
+            && !tok.is_expired(REFRESH_SKEW_SECS)
+        {
+            return Ok(tok.access_token.clone());
         }
 
         // Likewise prefer the on-disk refresh token: under rotation, ours may
@@ -585,9 +585,10 @@ mod tests {
         let a = random_state().unwrap();
         let b = random_state().unwrap();
         assert_ne!(a, b);
-        assert!(a
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_'));
+        assert!(
+            a.chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        );
     }
 
     #[test]

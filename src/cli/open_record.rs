@@ -1,6 +1,6 @@
+use crate::cli::GlobalFlags;
 use crate::cli::kernel::{build_client, build_profile, write_response};
 use crate::cli::record_ref::{self, RefId};
-use crate::cli::GlobalFlags;
 use crate::client::normalize_base_url;
 use crate::error::{Error, Result};
 use serde_json::json;

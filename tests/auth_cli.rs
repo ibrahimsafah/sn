@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{sn_cmd, write_oauth_profile, write_profiles, ProfileSpec};
+use common::{ProfileSpec, sn_cmd, write_oauth_profile, write_profiles};
 use serde_json::Value;
 use sn::config::now_unix;
 use std::path::Path;

@@ -321,12 +321,12 @@ fn relation_delete(global: &GlobalFlags, args: CmdbRelationDeleteArgs) -> Result
                     "give the CI once: either `<CLASS> <SYS_ID> <REL_SYS_ID>` or a \
                      combined `<CLASS>:<ID> <REL_SYS_ID>`, not both"
                         .into(),
-                ))
+                ));
             }
             (None, _) => {
                 return Err(Error::Usage(
                     "missing REL_SYS_ID: pass `<CLASS>:<ID> <REL_SYS_ID>`".into(),
-                ))
+                ));
             }
         }
     } else {
@@ -340,7 +340,7 @@ fn relation_delete(global: &GlobalFlags, args: CmdbRelationDeleteArgs) -> Result
                     "missing SYS_ID and/or REL_SYS_ID: pass `<CLASS> <SYS_ID> \
                      <REL_SYS_ID>` or a combined `<CLASS>:<ID> <REL_SYS_ID>`"
                         .into(),
-                ))
+                ));
             }
         }
     };

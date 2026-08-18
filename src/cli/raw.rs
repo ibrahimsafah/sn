@@ -1,7 +1,7 @@
 use crate::body::{self, EmptyBody};
 use crate::cli::GlobalFlags;
 use crate::error::{Error, Result};
-use reqwest::header::{HeaderMap, HeaderName, HeaderValue, AUTHORIZATION};
+use reqwest::header::{AUTHORIZATION, HeaderMap, HeaderName, HeaderValue};
 use serde_json::Value;
 
 use super::kernel::{build_client_with_headers, build_profile, write_response};

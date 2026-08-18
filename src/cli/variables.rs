@@ -29,14 +29,14 @@
 //! they store row JSON, not per-variable values.
 
 use crate::body::{self, EmptyBody};
+use crate::cli::GlobalFlags;
 use crate::cli::kernel::{connect, write_response};
 use crate::cli::record_ref;
-use crate::cli::GlobalFlags;
 use crate::client::Client;
 use crate::error::{Error, Result};
 use clap::Subcommand;
 use serde::Serialize;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 use std::collections::BTreeMap;
 
 const PUT_BASE: &str = "/api/sn_sc/servicecatalog/variables";

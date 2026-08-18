@@ -1,7 +1,7 @@
 use crate::cli::GlobalFlags;
 use crate::error::Result;
 use clap::{Arg, ArgAction, Command as ClapCommand};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 use super::kernel::write_response;
 

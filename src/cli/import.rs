@@ -59,7 +59,7 @@ pub fn bulk(global: &GlobalFlags, args: ImportBulkArgs) -> Result<()> {
         _ => {
             return Err(Error::Usage(
                 "--data must be a JSON array of records or {\"records\": [...]}".into(),
-            ))
+            ));
         }
     };
     let resp = client.post(&path, &[], &body)?;

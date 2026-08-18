@@ -85,17 +85,17 @@
 //! hold a watcher open forever: silence accumulates across sessions.
 
 use crate::amb::{self, Amb, Event};
-use crate::cli::kernel::{build_client, build_profile};
 use crate::cli::GlobalFlags;
+use crate::cli::kernel::{build_client, build_profile};
 use crate::config::ResolvedProfile;
 use crate::error::{Error, Result};
 use crate::observability::log_note;
 use crate::output::write_jsonl_line;
 use clap::ValueEnum;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::io::{self, Write};
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 /// How often the read loop surfaces to check deadlines and Ctrl-C. Bounds how
@@ -1114,16 +1114,20 @@ mod tests {
         // A malformed or foreign payload carries neither key; a filter must not
         // silently treat "field absent" as "matches".
         let bare = json!({"unrelated": 7});
-        assert!(!Filter {
-            operations: vec![Operation::Update],
-            ..Default::default()
-        }
-        .accepts(&bare));
-        assert!(!Filter {
-            on_change: vec!["state".into()],
-            ..Default::default()
-        }
-        .accepts(&bare));
+        assert!(
+            !Filter {
+                operations: vec![Operation::Update],
+                ..Default::default()
+            }
+            .accepts(&bare)
+        );
+        assert!(
+            !Filter {
+                on_change: vec!["state".into()],
+                ..Default::default()
+            }
+            .accepts(&bare)
+        );
     }
 
     // ── the reconnect gap marker ────────────────────────────────────────────

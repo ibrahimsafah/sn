@@ -14,8 +14,9 @@
 //! parallel-safe.
 
 use sn::config::{
-    load_config_from, load_credentials_from, save_config_to, save_credentials_to, update_config_at,
-    update_credentials_at, Config, Credentials, ProfileConfig, ProfileCredentials, TokenSet,
+    Config, Credentials, ProfileConfig, ProfileCredentials, TokenSet, load_config_from,
+    load_credentials_from, save_config_to, save_credentials_to, update_config_at,
+    update_credentials_at,
 };
 use std::path::Path;
 use std::sync::{Arc, Barrier};

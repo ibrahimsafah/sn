@@ -20,15 +20,15 @@
 //! a note whose *text* contains a line shaped exactly like an entry header
 //! will split the entry there.
 
+use crate::cli::GlobalFlags;
 use crate::cli::graphql::{errors_to_api_error, execute, graphql_errors};
 use crate::cli::kernel::{connect, write_response};
 use crate::cli::record_ref;
-use crate::cli::GlobalFlags;
 use crate::client::Client;
 use crate::error::{Error, Result};
 use clap::ValueEnum;
 use serde::Serialize;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 
 #[derive(clap::Args, Debug)]
 pub struct JournalArgs {
@@ -151,10 +151,10 @@ fn fetch_record_streams(
     let mut last_missing: Option<String> = None;
     'attempt: for cols in attempts {
         // Skip an attempt that re-requests a column already known missing.
-        if let Some(missing) = &last_missing {
-            if cols.contains(&missing.as_str()) {
-                continue;
-            }
+        if let Some(missing) = &last_missing
+            && cols.contains(&missing.as_str())
+        {
+            continue;
         }
         let selection: Vec<String> = cols
             .iter()

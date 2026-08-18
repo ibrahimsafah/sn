@@ -8,7 +8,7 @@ mod common;
 
 use serde_json::json;
 use serial_test::serial;
-use sn::config::{now_unix, ResolvedOauth, ResolvedProfile, TokenSet};
+use sn::config::{ResolvedOauth, ResolvedProfile, TokenSet, now_unix};
 use wiremock::matchers::{body_string_contains, method, path};
 use wiremock::{Mock, ResponseTemplate};
 
@@ -16,7 +16,9 @@ use wiremock::{Mock, ResponseTemplate};
 #[serial]
 async fn ensure_access_token_refreshes_expired_and_persists() {
     let tmp = tempfile::tempdir().unwrap();
-    std::env::set_var("SN_CONFIG_DIR", tmp.path());
+    // SAFETY: `#[serial]` + `current_thread` — no other thread reads the
+    // environment while this test owns it.
+    unsafe { std::env::set_var("SN_CONFIG_DIR", tmp.path()) };
 
     let server = wiremock::MockServer::start().await;
     Mock::given(method("POST"))
@@ -62,14 +64,18 @@ async fn ensure_access_token_refreshes_expired_and_persists() {
     assert_eq!(saved.access_token, "NEW_AT");
     assert_eq!(saved.refresh_token.as_deref(), Some("NEW_RT"));
 
-    std::env::remove_var("SN_CONFIG_DIR");
+    // SAFETY: `#[serial]` + `current_thread` — no other thread reads the
+    // environment while this test owns it.
+    unsafe { std::env::remove_var("SN_CONFIG_DIR") };
 }
 
 #[tokio::test(flavor = "current_thread")]
 #[serial]
 async fn ensure_access_token_returns_cached_when_valid() {
     let tmp = tempfile::tempdir().unwrap();
-    std::env::set_var("SN_CONFIG_DIR", tmp.path());
+    // SAFETY: `#[serial]` + `current_thread` — no other thread reads the
+    // environment while this test owns it.
+    unsafe { std::env::set_var("SN_CONFIG_DIR", tmp.path()) };
 
     // No mock and an unroutable instance: if the code attempted a refresh it
     // would fail. Returning the cached token proves it short-circuited.
@@ -95,5 +101,7 @@ async fn ensure_access_token_returns_cached_when_valid() {
         .unwrap();
     assert_eq!(token, "CACHED_AT");
 
-    std::env::remove_var("SN_CONFIG_DIR");
+    // SAFETY: `#[serial]` + `current_thread` — no other thread reads the
+    // environment while this test owns it.
+    unsafe { std::env::remove_var("SN_CONFIG_DIR") };
 }

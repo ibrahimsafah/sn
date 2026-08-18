@@ -42,11 +42,11 @@
 
 use crate::cli::graphql::{errors_to_api_error, execute, graphql_errors};
 use crate::cli::kernel::{connect, write_response};
-use crate::cli::{auth, GlobalFlags};
+use crate::cli::{GlobalFlags, auth};
 use crate::client::Client;
 use crate::error::{Error, Result};
 use clap::Subcommand;
-use serde_json::{json, Map, Value};
+use serde_json::{Map, Value, json};
 
 const PICKER_APPLICATION: &str = "/api/now/ui/concoursepicker/application";
 const PICKER_UPDATESET: &str = "/api/now/ui/concoursepicker/updateset";
@@ -205,7 +205,7 @@ pub fn set_updateset(global: &GlobalFlags, args: ContextTargetArgs) -> Result<()
                 detail: None,
                 transaction_id: None,
                 sn_error: Some(context_json(&state, None)),
-            })
+            });
         }
     }
     write_response(global, &context_json(&state, Some(&previous)))

@@ -8,8 +8,8 @@
 use crate::cli::{GlobalFlags, OutputMode};
 use crate::client::{Auth, Client};
 use crate::config::{
-    config_path, credentials_path, load_config_from, load_credentials_from, resolve_profile,
-    AuthMethod, ProfileResolverInputs, ResolvedProfile,
+    AuthMethod, ProfileResolverInputs, ResolvedProfile, config_path, credentials_path,
+    load_config_from, load_credentials_from, resolve_profile,
 };
 use crate::error::{Error, Result};
 use crate::output::{Format, ResolvedFormat};
@@ -91,11 +91,7 @@ pub(crate) fn build_client_with_headers(
 }
 
 pub(crate) fn bool_opt(b: bool) -> Option<bool> {
-    if b {
-        Some(true)
-    } else {
-        None
-    }
+    if b { Some(true) } else { None }
 }
 
 /// Private on purpose: `write_response` is the single place a command's final

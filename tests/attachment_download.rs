@@ -5,7 +5,7 @@
 
 mod common;
 
-use common::{sn_cmd, write_profiles, ProfileSpec};
+use common::{ProfileSpec, sn_cmd, write_profiles};
 use std::io::{Read, Write};
 use std::net::TcpListener;
 use std::path::Path;

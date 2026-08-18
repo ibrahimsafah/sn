@@ -1,10 +1,10 @@
+use crate::cli::GlobalFlags;
 use crate::cli::auth::{complete_oauth_login, whoami};
 use crate::cli::kernel::{build_client, build_profile, confirm_destructive, write_response};
-use crate::cli::GlobalFlags;
 use crate::config::{
-    self, config_path, credentials_path, default_redirect_uri, load_config_from,
-    load_credentials_from, resolve_profile_name, save_config_to, save_credentials_to, AuthMethod,
-    OAuthConfig, OAuthGrant, ProfileConfig, ProfileCredentials,
+    self, AuthMethod, OAuthConfig, OAuthGrant, ProfileConfig, ProfileCredentials, config_path,
+    credentials_path, default_redirect_uri, load_config_from, load_credentials_from,
+    resolve_profile_name, save_config_to, save_credentials_to,
 };
 use crate::error::{Error, Result};
 use clap::Subcommand;
@@ -281,7 +281,7 @@ pub(crate) fn resolve_input(
             other => {
                 return Err(Error::Usage(format!(
                     "unknown auth method '{other}' (expected basic or oauth)"
-                )))
+                )));
             }
         },
     };
@@ -357,7 +357,7 @@ pub(crate) fn resolve_input(
                     Some(s)
                 }
                 (None, false, OAuthGrant::ClientCredentials, false) => {
-                    return Err(missing(caller.client_secret_flag(), caller))
+                    return Err(missing(caller.client_secret_flag(), caller));
                 }
                 (None, false, OAuthGrant::AuthorizationCode, _) => None,
             };

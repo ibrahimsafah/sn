@@ -2,7 +2,7 @@ use crate::config::ResolvedProfile;
 use crate::error::{Error, Result};
 use crate::observability::{log_body, log_request, log_response, log_response_headers};
 use reqwest::blocking::{Client as ReqwestClient, Response};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, CONTENT_TYPE, SET_COOKIE, USER_AGENT};
+use reqwest::header::{ACCEPT, CONTENT_TYPE, HeaderMap, HeaderValue, SET_COOKIE, USER_AGENT};
 use reqwest::{Method, StatusCode};
 use serde_json::Value;
 use std::io::{ErrorKind, Read, Write};
@@ -161,7 +161,7 @@ impl ClientBuilder {
             }
             let mut proxy = reqwest::Proxy::all(proxy_url)
                 .map_err(|e| Error::Config(format!("invalid proxy URL '{proxy_url}': {e}")))?;
-            if let (Some(ref u), Some(ref p)) = (&self.proxy_username, &self.proxy_password) {
+            if let (Some(u), Some(p)) = (&self.proxy_username, &self.proxy_password) {
                 proxy = proxy.basic_auth(u, p);
             }
             if let Some(ref hosts) = self.no_proxy {
@@ -548,7 +548,7 @@ fn stream_body<R: Read, W: Write>(
             Err(e) => {
                 return Err(DownloadError::Source(Error::Transport(format!(
                     "read body: {e}"
-                ))))
+                ))));
             }
         };
         sink.write_all(&buf[..n]).map_err(DownloadError::Sink)?;
@@ -665,16 +665,18 @@ fn parse_next_link(header: String) -> Option<String> {
 impl<'a> Iterator for Paginator<'a> {
     type Item = Result<Value>;
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(cap) = self.cap {
-            if cap != 0 && self.emitted >= cap {
-                return None;
-            }
+        if let Some(cap) = self.cap
+            && cap != 0
+            && self.emitted >= cap
+        {
+            return None;
         }
-        if self.buffer.is_empty() && !self.finished {
-            if let Err(e) = self.fetch_next_page() {
-                self.finished = true;
-                return Some(Err(e));
-            }
+        if self.buffer.is_empty()
+            && !self.finished
+            && let Err(e) = self.fetch_next_page()
+        {
+            self.finished = true;
+            return Some(Err(e));
         }
         match self.buffer.pop_front() {
             Some(v) => {
@@ -771,8 +773,8 @@ fn truncate_body(s: &str, max_chars: usize) -> String {
 #[cfg(test)]
 mod tests {
     use super::{
-        collect_session_cookies, redact_token_json, stream_body, DownloadError,
-        DOWNLOAD_BUFFER_BYTES,
+        DOWNLOAD_BUFFER_BYTES, DownloadError, collect_session_cookies, redact_token_json,
+        stream_body,
     };
     use reqwest::header::{HeaderMap, HeaderValue, SET_COOKIE};
     use std::io::{self, Read, Write};

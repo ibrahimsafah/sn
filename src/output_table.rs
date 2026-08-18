@@ -1,6 +1,6 @@
 use crate::error::Result;
 use crate::output::map_stdout_err;
-use comfy_table::{presets::UTF8_FULL, ContentArrangement, Table};
+use comfy_table::{ContentArrangement, Table, presets::UTF8_FULL};
 use serde_json::Value;
 use std::io::{self, Write};
 

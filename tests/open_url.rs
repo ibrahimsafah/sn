@@ -10,7 +10,7 @@
 
 mod common;
 
-use common::{sn_cmd, write_profiles, ProfileSpec};
+use common::{ProfileSpec, sn_cmd, write_profiles};
 
 fn print_url(instance: &str) -> String {
     let tmp = write_profiles(

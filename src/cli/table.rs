@@ -1,7 +1,7 @@
-use crate::body::{build_body, BodyInput};
+use crate::body::{BodyInput, build_body};
 use crate::cli::kernel::{bool_opt, confirm_delete, connect, emit, write_response};
 use crate::cli::record_ref;
-use crate::cli::{BodyArgs, DisplayValueOpt, GlobalFlags, OutputMode, ADVANCED};
+use crate::cli::{ADVANCED, BodyArgs, DisplayValueOpt, GlobalFlags, OutputMode};
 use crate::error::{Error, Result};
 use crate::query::{DeleteQuery, GetQuery, ListQuery, WriteQuery};
 use clap::Subcommand;

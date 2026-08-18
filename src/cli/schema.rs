@@ -163,10 +163,10 @@ fn keep_column(col: &Value, args: &SchemaColumnsArgs) -> bool {
     if args.references_only && gets("type") != "reference" {
         return false;
     }
-    if let Some(t) = args.r#type.as_deref() {
-        if !gets("type").eq_ignore_ascii_case(t) {
-            return false;
-        }
+    if let Some(t) = args.r#type.as_deref()
+        && !gets("type").eq_ignore_ascii_case(t)
+    {
+        return false;
     }
     if let Some(n) = args.filter.as_deref().map(str::to_lowercase) {
         let name = gets("name").to_lowercase();

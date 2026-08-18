@@ -1,6 +1,6 @@
 mod common;
 
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use wiremock::matchers::{header, method, path, query_param};
 use wiremock::{Mock, MockServer, ResponseTemplate};
 

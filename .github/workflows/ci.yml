@@ -37,7 +37,8 @@ jobs:
       - name: Every action pinned by SHA, no piped installers
         run: |
           set -eu
-          bad=$(grep -rn "uses:" .github/workflows/ | grep -vE '@[0-9a-f]{40}' || true)
+          # Anchored to the YAML key so the guard cannot match its own script.
+          bad=$(grep -rnE '^[[:space:]]*(-[[:space:]]+)?uses:' .github/workflows/ | grep -vE '@[0-9a-f]{40}' || true)
           if [ -n "$bad" ]; then
             printf 'action refs not pinned by commit SHA:\n%s\n' "$bad" >&2
             exit 1

@@ -1,5 +1,10 @@
 # Changelog
 
+## 0.13.1 (2026-08-19)
+
+### Added
+- API-key authentication: `sn init --auth apikey` and `sn profile add --auth apikey` (with `--api-key` / `--api-key-stdin`) store a ServiceNow inbound REST API key and send it as the `x-sn-apikey` header on every request — no username, password, or OAuth client needed. The key is verified against the instance before the profile is saved, lives in `credentials.toml` (0600), and `sn profile show` / `sn profile status` report `auth: "apikey"` and `hasApiKey` without ever printing the key.
+
 ## 0.13.0 (2026-08-18)
 
 ### Added

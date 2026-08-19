@@ -180,6 +180,10 @@ SN_CONFIG_DIR=/tmp/sn-sandbox sn profile add ci --instance dev12345 \
 SN_CONFIG_DIR=/tmp/sn-sandbox sn --profile ci table list incident --limit 1
 ```
 
+**API key.** `sn profile add --auth apikey --api-key-stdin < key.txt` works headlessly:
+the stored key goes out as the `x-sn-apikey` header on every request and is verified
+against the instance before the profile is saved, like any other credential.
+
 **OAuth.** `sn profile add --auth oauth --grant client_credentials` works headlessly
 (the token is minted and verified). The default `authorization_code` grant needs a
 browser, so there is nothing an agent can verify: `add` refuses on a non-TTY rather

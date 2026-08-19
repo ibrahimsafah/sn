@@ -13,7 +13,8 @@ pub struct InitArgs {
     /// Instance: short name (`dev380385`) or full URL.
     #[arg(long)]
     pub instance: Option<String>,
-    /// Authentication method: `basic` (username/password) or `oauth` (SSO / OAuth 2.0).
+    /// Authentication method: `basic` (username/password), `oauth` (SSO /
+    /// OAuth 2.0), or `apikey` (REST API key).
     #[arg(long, value_enum)]
     pub auth: Option<AuthMethod>,
     /// Username (basic auth only).
@@ -23,6 +24,11 @@ pub struct InitArgs {
     /// prompt — `--password` is visible in `ps` output and shell history.
     #[arg(long)]
     pub password: Option<String>,
+    /// REST API key (apikey auth only). Convenience flag; prefer the
+    /// interactive prompt — `--api-key` is visible in `ps` output and shell
+    /// history.
+    #[arg(long)]
+    pub api_key: Option<String>,
     /// OAuth client_id (oauth only).
     #[arg(long)]
     pub client_id: Option<String>,
@@ -57,6 +63,8 @@ pub fn run(global: &GlobalFlags, args: InitArgs) -> Result<()> {
         username: args.username,
         password: args.password,
         password_stdin: false,
+        api_key: args.api_key,
+        api_key_stdin: false,
         client_id: args.client_id,
         client_secret: args.client_secret,
         client_secret_stdin: false,
@@ -90,7 +98,7 @@ pub fn run(global: &GlobalFlags, args: InitArgs) -> Result<()> {
 
     let (name, instance) = (&input.name, &input.instance);
     match input.auth {
-        AuthMethod::Basic => {
+        AuthMethod::Basic | AuthMethod::Apikey => {
             eprintln!("profile '{name}' saved and verified ({instance}).");
         }
         AuthMethod::Oauth => {

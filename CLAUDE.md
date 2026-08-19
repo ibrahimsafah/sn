@@ -213,7 +213,7 @@ Verification is on by default and `save_and_verify` **rolls the config files bac
 
 ### OAuth / SSO authentication
 
-A profile authenticates via `auth = "basic"` (default) or `auth = "oauth"` in its `config.toml` entry. OAuth serves SSO-fronted instances (Okta/Azure AD/ADFS) where the password lives in the IdP, so Basic and the password grant can't work.
+A profile authenticates via `auth = "basic"` (default), `auth = "oauth"`, or `auth = "apikey"` in its `config.toml` entry. OAuth serves SSO-fronted instances (Okta/Azure AD/ADFS) where the password lives in the IdP, so Basic and the password grant can't work. `apikey` stores the platform's inbound REST API key in `credentials.toml` and sends it as the `x-sn-apikey` header (`Auth::ApiKey` in `client.rs`, marked sensitive so reqwest redacts it); it verifies through `whoami` like Basic, and switching a profile between methods clears the abandoned method's secrets.
 
 - **Split by secrecy:** non-secret OAuth config (client_id, redirect_uri, endpoint overrides, grant, pkce) lives in `config.toml` under `[profiles.<name>.oauth]`; the client secret and cached tokens live in `credentials.toml` (0600), mirroring the username/password split.
 - **Two grants:** `authorization_code` (interactive browser flow, loopback redirect server per RFC 8252, PKCE S256; registered as a **public client** — `sn init` neither needs nor prompts for a secret; pass `--client-secret` only for a confidential client) and `client_credentials` (non-interactive, confidential, requires a secret). The loopback `redirect_uri` (default `http://localhost:8400/callback`) **must be registered exactly** in the Application Registry.

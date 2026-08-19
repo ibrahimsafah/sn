@@ -79,10 +79,25 @@ pub(crate) fn build_client_with_headers(
         );
     // OAuth profiles attach a bearer token, refreshing (or minting, for
     // client-credentials) it transparently and persisting any new tokens.
+    // API-key profiles attach the stored key as the x-sn-apikey header.
     // Basic profiles fall through to the builder's default username/password.
-    if matches!(profile.auth_method, AuthMethod::Oauth) {
-        let token = crate::oauth::ensure_access_token(profile, timeout)?;
-        b = b.auth(Auth::Bearer { token });
+    match profile.auth_method {
+        AuthMethod::Oauth => {
+            let token = crate::oauth::ensure_access_token(profile, timeout)?;
+            b = b.auth(Auth::Bearer { token });
+        }
+        AuthMethod::Apikey => {
+            // resolve_profile guarantees the key for this method; the error is
+            // for a hand-built ResolvedProfile that skipped it.
+            let key = profile.api_key.clone().ok_or_else(|| {
+                Error::Config(format!(
+                    "no API key configured for profile '{}'; run `sn init`",
+                    profile.name
+                ))
+            })?;
+            b = b.auth(Auth::ApiKey { key });
+        }
+        AuthMethod::Basic => {}
     }
     if let Some(secs) = timeout {
         b = b.timeout(Duration::from_secs(secs));

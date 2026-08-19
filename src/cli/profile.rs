@@ -54,7 +54,8 @@ pub struct ProfileAddArgs {
     /// Instance: short name (`dev380385`) or full URL.
     #[arg(long)]
     pub instance: Option<String>,
-    /// Authentication method: `basic` (username/password) or `oauth` (SSO / OAuth 2.0).
+    /// Authentication method: `basic` (username/password), `oauth` (SSO /
+    /// OAuth 2.0), or `apikey` (REST API key).
     #[arg(long, value_enum)]
     pub auth: Option<AuthMethod>,
     /// Username (basic auth only).
@@ -67,6 +68,13 @@ pub struct ProfileAddArgs {
     /// Read the password from stdin (basic auth only).
     #[arg(long, conflicts_with = "client_secret_stdin")]
     pub password_stdin: bool,
+    /// REST API key (apikey auth only). Visible in `ps` output and shell
+    /// history — prefer `--api-key-stdin`.
+    #[arg(long, conflicts_with = "api_key_stdin")]
+    pub api_key: Option<String>,
+    /// Read the REST API key from stdin (apikey auth only).
+    #[arg(long, conflicts_with_all = ["password_stdin", "client_secret_stdin"])]
+    pub api_key_stdin: bool,
     /// OAuth client_id (oauth only).
     #[arg(long)]
     pub client_id: Option<String>,
@@ -114,10 +122,11 @@ pub fn run(global: &GlobalFlags, sub: ProfileSub) -> Result<()> {
     }
 }
 
-fn auth_str(method: AuthMethod) -> &'static str {
+pub(crate) fn auth_str(method: AuthMethod) -> &'static str {
     match method {
         AuthMethod::Basic => "basic",
         AuthMethod::Oauth => "oauth",
+        AuthMethod::Apikey => "apikey",
     }
 }
 
@@ -165,6 +174,13 @@ impl Caller {
             Caller::ProfileAdd => "--client-secret (or --client-secret-stdin)",
         }
     }
+
+    fn api_key_flag(self) -> &'static str {
+        match self {
+            Caller::Init => "--api-key",
+            Caller::ProfileAdd => "--api-key (or --api-key-stdin)",
+        }
+    }
 }
 
 /// One profile's worth of settings, with every prompt and flag already resolved.
@@ -174,6 +190,7 @@ pub(crate) struct ProfileInput {
     pub auth: AuthMethod,
     pub username: String,
     pub password: String,
+    pub api_key: String,
     pub client_id: String,
     pub client_secret: Option<String>,
     pub redirect_uri: Option<String>,
@@ -268,7 +285,7 @@ pub(crate) fn resolve_input(
         Some(m) => m,
         None => match ask(
             interactive,
-            "Auth method (basic/oauth) [basic]: ",
+            "Auth method (basic/oauth/apikey) [basic]: ",
             Some("basic".into()),
             "--auth",
             caller,
@@ -278,9 +295,10 @@ pub(crate) fn resolve_input(
         {
             "oauth" => AuthMethod::Oauth,
             "basic" => AuthMethod::Basic,
+            "apikey" => AuthMethod::Apikey,
             other => {
                 return Err(Error::Usage(format!(
-                    "unknown auth method '{other}' (expected basic or oauth)"
+                    "unknown auth method '{other}' (expected basic, oauth, or apikey)"
                 )));
             }
         },
@@ -292,6 +310,7 @@ pub(crate) fn resolve_input(
         auth,
         username: String::new(),
         password: String::new(),
+        api_key: String::new(),
         client_id: String::new(),
         client_secret: None,
         redirect_uri: None,
@@ -315,6 +334,22 @@ pub(crate) fn resolve_input(
             if input.username.trim().is_empty() || input.password.is_empty() {
                 return Err(Error::Usage(
                     "username and password are required for basic auth".into(),
+                ));
+            }
+        }
+        AuthMethod::Apikey => {
+            // A key is a secret like a password: same stdin/prompt discipline,
+            // same "never block a pipe" refusal.
+            input.api_key = match (&args.api_key, args.api_key_stdin) {
+                (Some(v), _) => v.clone(),
+                (None, true) => read_secret_stdin()?,
+                (None, false) if interactive => rpassword::prompt_password("API key: ")
+                    .map_err(|e| Error::Usage(format!("read API key: {e}")))?,
+                (None, false) => return Err(missing(caller.api_key_flag(), caller)),
+            };
+            if input.api_key.trim().is_empty() {
+                return Err(Error::Usage(
+                    "an API key is required for apikey auth".into(),
                 ));
             }
         }
@@ -474,14 +509,24 @@ fn save_profile_locked(
 
     match input.auth {
         AuthMethod::Basic => {
-            // Switching an OAuth profile to basic: drop the OAuth config and its
-            // secrets so the abandoned method can't leak or confuse.
+            // Switching an OAuth/API-key profile to basic: drop the abandoned
+            // method's config and secrets so they can't leak or confuse.
             pc.auth = AuthMethod::Basic;
             pc.oauth = None;
             cred.client_secret = None;
             cred.oauth_tokens = None;
+            cred.api_key = None;
             cred.username = input.username.clone();
             cred.password = input.password.clone();
+        }
+        AuthMethod::Apikey => {
+            pc.auth = AuthMethod::Apikey;
+            pc.oauth = None;
+            cred.username = String::new();
+            cred.password = String::new();
+            cred.client_secret = None;
+            cred.oauth_tokens = None;
+            cred.api_key = Some(input.api_key.clone());
         }
         AuthMethod::Oauth => {
             let existing = pc.oauth.take();
@@ -494,8 +539,10 @@ fn save_profile_locked(
                 grant: input.grant,
                 pkce: input.pkce,
             });
-            // Switching a basic profile to oauth clears the now-unused password.
+            // Switching a basic/apikey profile to oauth clears the now-unused
+            // password and API key.
             cred.password = String::new();
+            cred.api_key = None;
             cred.client_secret = input.client_secret.clone();
         }
     }
@@ -566,7 +613,7 @@ fn verify_profile(
     grant: OAuthGrant,
 ) -> Result<Option<String>> {
     match auth {
-        AuthMethod::Basic => {
+        AuthMethod::Basic | AuthMethod::Apikey => {
             // Scope resolution to this profile, independent of which one happens
             // to be the global default.
             let mut scoped = global.clone();
@@ -808,6 +855,11 @@ fn show(global: &GlobalFlags, name: Option<String>) -> Result<()> {
             if let Some(c) = cred {
                 out["username"] = json!(c.username);
             }
+        }
+        AuthMethod::Apikey => {
+            // The key is the only credential and it is a secret, so all there
+            // is to report is whether one is stored.
+            out["hasApiKey"] = json!(cred.and_then(|c| c.api_key.as_ref()).is_some());
         }
         AuthMethod::Oauth => {
             if let Some(o) = &p.oauth {

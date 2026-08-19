@@ -7,6 +7,7 @@ short version: install with Homebrew, run `sn init`, answer the prompts, done.
 - [First-time setup](#first-time-setup)
 - [Profiles](#profiles)
 - [Non-interactive setup (CI, containers, agents)](#non-interactive-setup-ci-containers-agents)
+- [API key](#api-key)
 - [OAuth / SSO](#oauth--sso)
 - [Configuration files](#configuration-files)
 - [Environment variables](#environment-variables)
@@ -41,7 +42,8 @@ Download from [Releases](https://github.com/tehubersheezy/servicenow-cli/release
 
 ## First-time setup
 
-`sn` supports **basic auth** (username + password) for most instances, and **OAuth / SSO**
+`sn` supports **basic auth** (username + password) for most instances, **API keys**
+(the platform's inbound REST API key, sent as the `x-sn-apikey` header), and **OAuth / SSO**
 for instances fronted by an external identity provider (Okta, Azure AD, ADFS), where the
 password lives in the IdP and basic auth cannot work.
 
@@ -51,7 +53,7 @@ For basic auth, run `sn init` and answer the prompts:
 sn init
 # Profile name [default]:
 # Instance (e.g. 'dev380385' or 'https://acme.service-now.com'): mycompany.service-now.com
-# Auth method (basic/oauth) [basic]:
+# Auth method (basic/oauth/apikey) [basic]:
 # Username: admin
 # Password: ********
 # profile 'default' saved and verified (mycompany.service-now.com).
@@ -115,6 +117,27 @@ selected yet, so `ci` needs `sn profile use ci` or an explicit `--profile ci`.
 | credentials rejected | exit 4, nothing written |
 | `--non-interactive` | never prompt, even on a terminal — fail naming the flag |
 | `--set-default` | also make it the default (otherwise `add` leaves it alone) |
+
+## API key
+
+For an instance with inbound REST API keys configured, store the key instead of a
+username/password. Every request then carries it as the `x-sn-apikey` header — the
+default auth parameter of the platform's API-key auth profile.
+
+```bash
+sn init --auth apikey --instance acme.service-now.com          # prompts for the key
+sn profile add ci --instance acme.service-now.com --auth apikey \
+  --api-key-stdin < key.txt                                    # non-interactive
+```
+
+Like every other credential, the key is verified against the instance before the
+profile is saved, and it lives in `credentials.toml` (`0600`) — `sn profile show`
+reports only whether one is stored, never the key itself.
+
+**One-time admin setup** (if the instance has no key yet): **System Web Services →
+API Access Policies → REST API Key → New** to generate the key, and make sure an
+**inbound authentication profile** of type API Key (auth parameter `x-sn-apikey: Auth Header`)
+is attached to the APIs you call via a REST API Access Policy.
 
 ## OAuth / SSO
 

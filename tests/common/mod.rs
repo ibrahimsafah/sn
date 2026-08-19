@@ -128,6 +128,32 @@ pub fn write_oauth_profile(
     tmp
 }
 
+/// Seed an API-key profile as raw TOML at the root of a fresh temp dir:
+/// `config.toml` with `auth = "apikey"` and `credentials.toml` holding the key.
+/// `default_profile` is set to `name`.
+pub fn write_apikey_profile(name: &str, instance: &str, api_key: &str) -> tempfile::TempDir {
+    let tmp = tempfile::tempdir().unwrap();
+    std::fs::write(
+        tmp.path().join("config.toml"),
+        format!(
+            "default_profile = \"{name}\"\n\n\
+             [profiles.{name}]\n\
+             instance = \"{instance}\"\n\
+             auth = \"apikey\"\n"
+        ),
+    )
+    .unwrap();
+    std::fs::write(
+        tmp.path().join("credentials.toml"),
+        format!(
+            "[profiles.{name}]\n\
+             api_key = \"{api_key}\"\n"
+        ),
+    )
+    .unwrap();
+    tmp
+}
+
 /// Build a `Command` for the compiled `sn` binary rooted at `config_dir`
 /// (via `SN_CONFIG_DIR`, which points directly at the directory containing
 /// `config.toml`/`credentials.toml`). Every env var the binary might read —
@@ -167,6 +193,7 @@ pub fn mock_profile(instance: &str) -> sn::config::ResolvedProfile {
         proxy_password: None,
         auth_method: sn::config::AuthMethod::Basic,
         oauth: None,
+        api_key: None,
     }
 }
 
@@ -201,5 +228,6 @@ pub fn mock_oauth_profile(instance: &str, access_token: &str) -> sn::config::Res
                 token_type: Some("Bearer".into()),
             }),
         }),
+        api_key: None,
     }
 }

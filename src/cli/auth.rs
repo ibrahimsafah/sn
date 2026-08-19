@@ -237,11 +237,14 @@ pub fn status(global: &GlobalFlags) -> Result<()> {
     let mut out = json!({
         "profile": profile.name,
         "instance": profile.instance,
-        "auth": if matches!(profile.auth_method, AuthMethod::Oauth) { "oauth" } else { "basic" },
+        "auth": crate::cli::profile::auth_str(profile.auth_method),
     });
     match profile.auth_method {
         AuthMethod::Basic => {
             out["username"] = json!(profile.username);
+        }
+        AuthMethod::Apikey => {
+            out["hasApiKey"] = json!(profile.api_key.is_some());
         }
         AuthMethod::Oauth => {
             if let Some(o) = &profile.oauth {

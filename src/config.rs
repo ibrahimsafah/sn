@@ -51,6 +51,8 @@ pub enum AuthMethod {
     Basic,
     /// OAuth 2.0 bearer token (Authorization Code for SSO, or Client Credentials).
     Oauth,
+    /// ServiceNow REST API key, sent as the `x-sn-apikey` request header.
+    Apikey,
 }
 
 impl AuthMethod {
@@ -170,6 +172,9 @@ pub struct ProfileCredentials {
     pub proxy_username: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proxy_password: Option<String>,
+    /// ServiceNow REST API key (`auth = "apikey"` profiles only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub api_key: Option<String>,
     /// OAuth client secret (confidential clients). Public/PKCE clients omit it.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub client_secret: Option<String>,
@@ -297,6 +302,42 @@ mod tests {
             },
         );
         let cr = Credentials { profiles };
+        let s = toml::to_string(&cr).unwrap();
+        let parsed: Credentials = toml::from_str(&s).unwrap();
+        assert_eq!(parsed, cr);
+    }
+
+    #[test]
+    fn apikey_profile_roundtrips_via_toml() {
+        let mut profiles = BTreeMap::new();
+        profiles.insert(
+            "keyed".into(),
+            ProfileConfig {
+                instance: "acme.service-now.com".into(),
+                auth: AuthMethod::Apikey,
+                ..Default::default()
+            },
+        );
+        let cfg = Config {
+            default_profile: Some("keyed".into()),
+            profiles,
+        };
+        let s = toml::to_string(&cfg).unwrap();
+        assert!(s.contains("auth = \"apikey\""), "{s}");
+        let parsed: Config = toml::from_str(&s).unwrap();
+        assert_eq!(parsed, cfg);
+
+        let mut cred_profiles = BTreeMap::new();
+        cred_profiles.insert(
+            "keyed".into(),
+            ProfileCredentials {
+                api_key: Some("KEY123".into()),
+                ..Default::default()
+            },
+        );
+        let cr = Credentials {
+            profiles: cred_profiles,
+        };
         let s = toml::to_string(&cr).unwrap();
         let parsed: Credentials = toml::from_str(&s).unwrap();
         assert_eq!(parsed, cr);
@@ -771,6 +812,8 @@ pub struct ResolvedProfile {
     pub auth_method: AuthMethod,
     /// OAuth state (config + cached tokens). `Some` iff `auth_method` is Oauth.
     pub oauth: Option<ResolvedOauth>,
+    /// REST API key. `Some` iff `auth_method` is Apikey.
+    pub api_key: Option<String>,
 }
 
 /// Fully-resolved OAuth state for a single invocation: client config plus any
@@ -839,7 +882,8 @@ pub fn resolve_profile(inputs: ProfileResolverInputs<'_>) -> Result<ResolvedProf
     let username_opt = profile_cred.map(|p| p.username.clone());
     let password_opt = profile_cred.map(|p| p.password.clone());
 
-    // Basic auth requires a username/password; OAuth profiles don't store them.
+    // Basic auth requires a username/password; OAuth and API-key profiles
+    // don't store them.
     let (username, password) = match auth_method {
         AuthMethod::Basic => (
             username_opt.ok_or_else(|| {
@@ -853,14 +897,28 @@ pub fn resolve_profile(inputs: ProfileResolverInputs<'_>) -> Result<ResolvedProf
                 ))
             })?,
         ),
-        AuthMethod::Oauth => (
+        AuthMethod::Oauth | AuthMethod::Apikey => (
             username_opt.unwrap_or_default(),
             password_opt.unwrap_or_default(),
         ),
     };
 
+    let api_key = match auth_method {
+        AuthMethod::Apikey => Some(
+            profile_cred
+                .and_then(|c| c.api_key.clone())
+                .filter(|k| !k.trim().is_empty())
+                .ok_or_else(|| {
+                    Error::Config(format!(
+                        "no API key configured for profile '{name}'; run `sn init`"
+                    ))
+                })?,
+        ),
+        AuthMethod::Basic | AuthMethod::Oauth => None,
+    };
+
     let oauth = match auth_method {
-        AuthMethod::Basic => None,
+        AuthMethod::Basic | AuthMethod::Apikey => None,
         AuthMethod::Oauth => {
             let cfg = profile_cfg.and_then(|p| p.oauth.as_ref()).ok_or_else(|| {
                 Error::Config(format!(
@@ -940,6 +998,7 @@ pub fn resolve_profile(inputs: ProfileResolverInputs<'_>) -> Result<ResolvedProf
         proxy_password,
         auth_method,
         oauth,
+        api_key,
     })
 }
 
@@ -1580,6 +1639,60 @@ mod resolution_tests {
         assert_eq!(o.token_path, "/oauth_token.do");
         assert_eq!(o.client_secret.as_deref(), Some("shh"));
         assert_eq!(o.tokens.unwrap().access_token, "AT");
+    }
+
+    #[test]
+    fn apikey_profile_resolves_without_requiring_username_password() {
+        let mut cfg = Config {
+            default_profile: Some("keyed".into()),
+            ..Default::default()
+        };
+        cfg.profiles.insert(
+            "keyed".into(),
+            ProfileConfig {
+                instance: "keyed.example.com".into(),
+                auth: AuthMethod::Apikey,
+                ..Default::default()
+            },
+        );
+        let mut cr = Credentials::default();
+        cr.profiles.insert(
+            "keyed".into(),
+            ProfileCredentials {
+                api_key: Some("KEY123".into()),
+                ..Default::default()
+            },
+        );
+        let r = resolve_profile(base_inputs(&cfg, &cr)).unwrap();
+        assert_eq!(r.auth_method, AuthMethod::Apikey);
+        assert_eq!(r.api_key.as_deref(), Some("KEY123"));
+        assert!(r.oauth.is_none());
+    }
+
+    #[test]
+    fn apikey_profile_without_stored_key_errors() {
+        // An apikey profile whose credential entry is missing (or blank) must
+        // fail here, not go out as an unauthenticated request.
+        let mut cfg = Config {
+            default_profile: Some("keyed".into()),
+            ..Default::default()
+        };
+        cfg.profiles.insert(
+            "keyed".into(),
+            ProfileConfig {
+                instance: "keyed.example.com".into(),
+                auth: AuthMethod::Apikey,
+                ..Default::default()
+            },
+        );
+        let err = resolve_profile(base_inputs(&cfg, &Credentials::default())).unwrap_err();
+        match err {
+            Error::Config(msg) => assert!(
+                msg.contains("no API key configured for profile 'keyed'"),
+                "unexpected error message: {msg}"
+            ),
+            other => panic!("expected Error::Config, got: {other:?}"),
+        }
     }
 
     #[test]

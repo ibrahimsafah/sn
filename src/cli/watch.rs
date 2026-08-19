@@ -1920,6 +1920,7 @@ mod tests {
             proxy_password: None,
             auth_method: crate::config::AuthMethod::Basic,
             oauth: None,
+            api_key: None,
         }
     }
 

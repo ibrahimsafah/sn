@@ -19,10 +19,19 @@ pub enum Auth {
     Bearer {
         token: String,
     },
+    /// ServiceNow REST API key, sent as the [`API_KEY_HEADER`] request header
+    /// (the default auth parameter of the platform's inbound API-key auth
+    /// profile) rather than an `Authorization` scheme.
+    ApiKey {
+        key: String,
+    },
     /// No credentials attached — used for the OAuth token endpoint, which
     /// authenticates via form parameters (or a Basic client_id:secret) instead.
     None,
 }
+
+/// The header ServiceNow's inbound API-key authentication reads by default.
+pub const API_KEY_HEADER: &str = "x-sn-apikey";
 
 pub struct Client {
     http: ReqwestClient,
@@ -39,6 +48,7 @@ impl std::fmt::Debug for Client {
         let scheme = match &self.auth {
             Auth::Basic { username, .. } => format!("basic({username})"),
             Auth::Bearer { .. } => "bearer".to_string(),
+            Auth::ApiKey { .. } => "apikey".to_string(),
             Auth::None => "none".to_string(),
         };
         f.debug_struct("Client")
@@ -300,6 +310,19 @@ impl Client {
         req = match &self.auth {
             Auth::Basic { username, password } => req.basic_auth(username, Some(password)),
             Auth::Bearer { token } => req.bearer_auth(token),
+            Auth::ApiKey { key } => {
+                // Built as a HeaderValue here (rather than `.header(name, key)`)
+                // so it can be marked sensitive — reqwest then redacts it from
+                // its own debug output the way basic_auth/bearer_auth do.
+                let mut value = HeaderValue::from_str(key).map_err(|_| {
+                    Error::Config(
+                        "the stored API key contains characters not valid in an HTTP header"
+                            .to_string(),
+                    )
+                })?;
+                value.set_sensitive(true);
+                req.header(API_KEY_HEADER, value)
+            }
             Auth::None => req,
         };
         // Caller headers go on last, after every request-level header this

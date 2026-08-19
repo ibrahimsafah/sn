@@ -13,9 +13,21 @@
 # file is dist-generated and `dist generate` would silently drop the step.
 name: Attach provenance
 
+# The release event below never fires in practice: release.yml publishes the
+# release with its own GITHUB_TOKEN, and GitHub suppresses workflow-triggering
+# events from that token (recursion guard) — measured on v0.13.0 and v0.13.1,
+# where this workflow had zero runs and the asset had to be attached by hand.
+# The dispatch trigger is the working path: after a release,
+#   gh workflow run attach-provenance.yml -f tag=<tag>
 on:
   release:
     types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to attach provenance to (e.g. v0.13.1)"
+        required: true
+        type: string
 
 permissions:
   contents: read
@@ -28,7 +40,7 @@ jobs:
       contents: write
     env:
       GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-      TAG: ${{ github.event.release.tag_name }}
+      TAG: ${{ github.event.release.tag_name || inputs.tag }}
     steps:
       - name: Download assets, extract provenance, upload
         run: |

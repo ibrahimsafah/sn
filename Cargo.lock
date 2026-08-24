@@ -1737,7 +1737,7 @@ dependencies = [
  "ctrlc",
  "directories",
  "fs4",
- "getrandom 0.2.17",
+ "getrandom 0.4.3",
  "is-terminal",
  "predicates",
  "reqwest",

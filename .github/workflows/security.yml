@@ -33,7 +33,7 @@ jobs:
       # source (as rustsec/audit-check does) — the from-source build re-fetches
       # the crates.io index every run and was failing intermittently with HTTP2
       # framing errors. A prebuilt binary never touches the index.
-      - uses: taiki-e/install-action@5b4d68e2e660441203ab128a23676f1e4faf1532 # v2.86.3
+      - uses: taiki-e/install-action@37f7c5781271959fb65b6b35224e28652ff2b63d # v2.87.0
         with:
           tool: cargo-audit
       - run: cargo audit

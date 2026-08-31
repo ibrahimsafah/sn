@@ -69,7 +69,7 @@ never `0` — no HTTP response carries that — so a `jq` test has to tolerate a
 missing key (`jq -r '.error.status_code'` prints `null`, which no comparison
 against a status will match).
 
-`status_code: 200` is a *different* thing and does occur: `sn graphql`,
+`status_code: 200` is a *different* thing and does occur: `sn graphql`, `sn gr`,
 `sn journal` and `sn variables set` detect failures ServiceNow reports in-band,
 inside a genuinely successful HTTP 200, and they report that 200 truthfully
 rather than hiding it. So `status_code` answers "what did HTTP say", not "did

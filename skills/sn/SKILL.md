@@ -105,7 +105,9 @@ get labels — and dates localized to the caller's timezone. A localized date fe
 
 Other surfaces are well covered by `--help`; a few notes worth having anyway: `sn api search
 <term>` discovers what endpoints the instance actually publishes (use it before hand-writing
-`sn raw`); `sn graphql` fails **in band** — HTTP 200 with an `errors` array, mapped to exit 2
+`sn raw`); `sn gr <table> -f number,caller_id.manager.email` reads dot-walked reference fields
+in one round trip without writing GraphQL (`--count` for just the match count); `sn graphql`
+and `sn gr` fail **in band** — HTTP 200 with an `errors` array, mapped to exit 2
 with partial `data` still on stdout; `sn attachment download --out` stages and renames, so a
 failed download never leaves a truncated file, and reports `{"path","size"}`; `sn identify
 query` shows what the IRE *would* match before `create-update` writes; `sn catalog

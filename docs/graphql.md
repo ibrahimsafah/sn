@@ -5,6 +5,10 @@ this document was verified live against a Zurich PDI (dev421992, 2026-08-11)
 — including the ACL behavior, which was tested as both admin and a
 freshly-minted `itil` user.
 
+**Status:** the record-read wrapper shipped as `sn gr` in 0.13.2 (#99, PR
+#101) — see [usage.md](usage.md#dot-walked-reads-sn-gr). Batching, schema
+discovery, and keyset `--all` remain follow-ups tracked in #99.
+
 ## Background: the endpoint
 
 One endpoint serves everything: `POST /api/now/graphql` (basic auth works —

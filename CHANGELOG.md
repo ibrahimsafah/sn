@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Added
+- **`sn gr <table>`** — record reads compiled to GraphQL, so reference fields dot-walk in one round trip: `sn gr incident -f number,caller_id.manager.email -q "active=true"`. Results come back flattened to the dotted keys, piping like `sn table list`; `--count` emits just the matching row count; `--display-value` works as everywhere. `sn graphql` remains the passthrough for everything else (#99).
+
 ## 0.13.1 (2026-08-19)
 
 ### Added

@@ -11,6 +11,7 @@ pub mod cmdb;
 pub mod completion;
 pub mod context;
 pub mod get_record;
+pub mod gr;
 pub mod graphql;
 pub mod identify;
 pub mod import;
@@ -60,6 +61,7 @@ pub use cmdb::{
 pub use completion::{CompletionArgs, Shell as CompletionShell};
 pub use context::{ContextSub, ContextTargetArgs};
 pub use get_record::GetRecordArgs;
+pub use gr::GrArgs;
 pub use graphql::GraphqlArgs;
 pub use identify::{IdentifyArgs, IdentifyEnhancedArgs, IdentifySub};
 pub use import::{ImportBulkArgs, ImportCreateArgs, ImportGetArgs, ImportSub};
@@ -457,6 +459,8 @@ pub enum Command {
     Open(OpenArgs),
     /// Generic REST passthrough for unmodeled endpoints (`sn raw <METHOD> <PATH>`).
     Raw(RawArgs),
+    /// Read records via GraphQL with dot-walked reference fields (`sn gr <TABLE> -f <FIELDS>`).
+    Gr(GrArgs),
     /// Run a GraphQL query against POST /api/now/graphql (`sn graphql <QUERY>`).
     Graphql(GraphqlArgs),
     /// Generate a shell completion script (`sn completion <SHELL>`).

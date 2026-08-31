@@ -282,6 +282,35 @@ What GraphQL gives you that the Table API can't: a total match count beside a pa
 verdicts, choice lists resolved in record context (`_choices`), and structured dot-walking
 through reference fields (`_reference`). See [graphql.md](graphql.md) for the design notes.
 
+## Dot-walked reads (`sn gr`)
+
+`sn gr` compiles friendly flags into a `GlideRecord_Query` document, for the one thing
+GraphQL does that the Table API can't: dot-walking through reference fields with real
+values, in one round trip (over REST that's one extra GET per hop per record):
+
+```bash
+sn gr incident -f number,short_description,caller_id.manager.email -q "active=true" --limit 20
+sn gr incident --count -q "active=true"       # just the matching row count
+sn gr incident -f caller_id,caller_id.email   # a reference itself plus a field behind it
+```
+
+Each dotted path nests through `_reference` (`caller_id.manager.email` compiles to
+`caller_id { _reference { manager { _reference { email … } } } }`); paths sharing a prefix
+are selected once. Results are flattened back to the dotted keys you typed, so output
+looks like `sn table list` and pipes the same way:
+
+```json
+[{"number": "INC0010001", "caller_id.manager.email": "beth.anglin@example.com"}]
+```
+
+`--display-value` works as everywhere (default `true`; `all` emits
+`{display_value, value}` per field, the Table API's spelling). A null reference anywhere
+along a path yields `null` for the whole key — dot-walking semantics. `ORDERBY`/
+`ORDERBYDESC` clauses in `-q` are honored. Dot-walking through a non-reference field
+fails with a message naming the mistake, and a table with no GraphQL query field is named
+too. `sn graphql` remains the passthrough for everything the compiler doesn't reach:
+mutations, aggregates, scripted namespaces, multi-operation documents.
+
 ## Change Management
 
 Normal, emergency, and standard change requests across their lifecycle:

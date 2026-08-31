@@ -8,10 +8,13 @@
 # Two GitHub quirks shape the design — the first is the same event
 # suppression documented on attach-provenance.yml:
 #
-#   1. Events raised with a workflow's own GITHUB_TOKEN trigger no other
-#      workflows. A PR opened here therefore gets zero pull_request runs —
-#      and main's ruleset requires the `test (…)` and `msrv` contexts, so
-#      an undispatched PR could never merge.
+#   1. A PR opened with a workflow's own GITHUB_TOKEN gets no usable
+#      pull_request runs. Measured on this job's first live run: the events
+#      DO fire, but every run parks as `action_required` ("requires
+#      approval"), starts no jobs, and reports no contexts until a human
+#      clicks Approve and run — weekly, forever. Main's ruleset requires
+#      the `test (…)` and `msrv` contexts, so an undispatched PR could
+#      never merge unattended.
 #   2. workflow_dispatch (and repository_dispatch) are the documented
 #      exception to (1). So after pushing, this job dispatches ci.yml and
 #      security.yml AT THE REFRESH BRANCH; their check runs land on the
@@ -99,9 +102,10 @@ jobs:
             echo
             echo "> [!NOTE]"
             echo "> Checks on this PR arrive via **dispatched** runs of CI and Security —"
-            echo "> a PR opened with the workflow's own GITHUB_TOKEN raises no"
-            echo "> pull_request events — so they can take a minute to attach. The"
-            echo "> required contexts (test ×3, msrv) come from the dispatched CI run."
+            echo "> this PR's own pull_request runs park as action_required and report"
+            echo "> nothing without a manual approval — so they can take a minute to"
+            echo "> attach. The required contexts (test ×3, msrv) come from the"
+            echo "> dispatched CI run; the action_required entries can be ignored."
           } > /tmp/pr-body.md
           existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')
           if [ -z "$existing" ]; then

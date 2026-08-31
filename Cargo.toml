@@ -37,7 +37,7 @@ is-terminal = "0.4"
 clap_complete = "4"
 webbrowser = "1"
 comfy-table = "7"
-base64 = "0.22"
+base64 = "0.23"
 sha2 = "0.10"
 getrandom = "0.2"
 # Blocking WebSocket for the AMB record watcher. Deliberately *not*

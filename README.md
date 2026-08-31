@@ -58,6 +58,7 @@ of them with examples.
 | [`sn journal`](docs/usage.md#journal-comments-and-work-notes) | Comments and work notes, parsed into structured entries |
 | [`sn aggregate`](docs/usage.md#aggregate-queries) | Server-side counts, sums, and averages — no record fetching |
 | [`sn graphql`](docs/usage.md#graphql) | Run GraphQL documents, with in-band errors mapped to real exit codes |
+| [`sn gr`](docs/usage.md#dot-walked-reads-sn-gr) | Read records with dot-walked reference fields, one round trip, no GraphQL to write |
 | [`sn change`](docs/usage.md#change-management) | Change requests: normal/emergency/standard, tasks, CIs, conflicts, approvals |
 | [`sn attachment`](docs/usage.md#attachments) | Upload and download files on any record |
 | [`sn cmdb`](docs/usage.md#cmdb) | Configuration Items: CRUD, class schema, relationships |

@@ -3,6 +3,10 @@ on:
   pull_request:
   push:
     branches: [main]
+  # lockfile-refresh.yml dispatches this at its branch: a PR opened with a
+  # workflow's own GITHUB_TOKEN raises no pull_request events, and main's
+  # ruleset requires the test/msrv contexts, so the checks must be summoned.
+  workflow_dispatch:
 
 permissions:
   contents: read

@@ -1,0 +1,110 @@
+# Keeps Cargo.lock's transitive pins fresh, so a yanked crate or a patched
+# advisory self-heals instead of leaving the daily Security run red until a
+# human runs `cargo update` by hand (chacha20 0.10.1's yank did exactly that,
+# 2026-08-28 through 08-31). Dependabot cannot cover this gap: its cargo
+# version updates track manifest-direct dependencies, and a yank is not an
+# advisory, so lockfile-only transitive deps fall through both nets.
+#
+# Two GitHub quirks shape the design — the first is the same event
+# suppression documented on attach-provenance.yml:
+#
+#   1. Events raised with a workflow's own GITHUB_TOKEN trigger no other
+#      workflows. A PR opened here therefore gets zero pull_request runs —
+#      and main's ruleset requires the `test (…)` and `msrv` contexts, so
+#      an undispatched PR could never merge.
+#   2. workflow_dispatch (and repository_dispatch) are the documented
+#      exception to (1). So after pushing, this job dispatches ci.yml and
+#      security.yml AT THE REFRESH BRANCH; their check runs land on the
+#      branch head SHA and satisfy the required contexts by name.
+#
+# One rolling branch (bot/lockfile-refresh), force-pushed: an unmerged
+# refresh is superseded, its open PR just gains the newer commit, and the
+# checks are re-dispatched for the new head.
+#
+# Weekly, plus manual. If a scheduled Security run goes red midweek on a
+# yanked crate, don't wait for Monday:
+#
+#   gh workflow run lockfile-refresh.yml
+name: Lockfile refresh
+
+on:
+  schedule:
+    # Mondays 05:00 UTC, alongside Dependabot's weekly pass.
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # push the refresh branch
+      pull-requests: write # open/update the PR
+      actions: write # dispatch ci.yml + security.yml at the branch
+    env:
+      GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      BRANCH: bot/lockfile-refresh
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: dtolnay/rust-toolchain@6c977a6ca4077a0ceb28ffbe03f59d46e9ac8772
+        with:
+          toolchain: stable
+
+      - name: Refresh the lockfile
+        id: update
+        run: |
+          cargo update 2>&1 | tee /tmp/cargo-update.log
+          if git diff --quiet Cargo.lock; then
+            echo "lockfile already current; nothing to do"
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+            git diff --stat Cargo.lock
+          fi
+
+      - name: Push the refresh branch
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b "$BRANCH"
+          git add Cargo.lock
+          # The update log in the commit body is the record of what moved.
+          git commit -m "chore(deps): refresh Cargo.lock (scheduled)" \
+                     -m "$(grep -v '^ *Updating crates.io index' /tmp/cargo-update.log)"
+          git push --force origin "$BRANCH"
+
+      - name: Open or update the PR
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          {
+            echo "Automated weekly \`cargo update\`. Keeps transitive pins current so"
+            echo "yanked crates and patched advisories don't strand the scheduled"
+            echo "Security run red (Dependabot doesn't reach lockfile-only deps)."
+            echo
+            echo '```'
+            grep -v '^ *Updating crates.io index' /tmp/cargo-update.log
+            echo '```'
+            echo
+            echo "> [!NOTE]"
+            echo "> Checks on this PR arrive via **dispatched** runs of CI and Security —"
+            echo "> a PR opened with the workflow's own GITHUB_TOKEN raises no"
+            echo "> pull_request events — so they can take a minute to attach. The"
+            echo "> required contexts (test ×3, msrv) come from the dispatched CI run."
+          } > /tmp/pr-body.md
+          existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')
+          if [ -z "$existing" ]; then
+            gh pr create --head "$BRANCH" \
+              --title "chore(deps): refresh Cargo.lock" \
+              --body-file /tmp/pr-body.md
+          else
+            gh pr edit "$existing" --body-file /tmp/pr-body.md
+          fi
+
+      - name: Dispatch the required checks at the branch
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          gh workflow run ci.yml --ref "$BRANCH"
+          gh workflow run security.yml --ref "$BRANCH"

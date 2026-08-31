@@ -28,6 +28,11 @@ dropped and you get every row. Confirm before trusting it:
 sn schema columns incident | jq -r '.[] | select(.type=="reference") | .name'
 ```
 
+The *read* side of dot-walking is `sn gr` — `sn gr incident -f number,caller_id.manager.email`
+fetches dot-walked values in one round trip. The same rule governs its paths: every
+non-terminal segment must be a reference, though there a wrong segment errors instead of
+widening the result.
+
 ## Filtering a base table by class
 
 ```bash
@@ -78,11 +83,5 @@ Two shapes that make the obvious `jq` return nothing:
 
 ## Pagination
 
-`--all` streams JSONL; `--array` buffers into one JSON array; `--max-records` caps it.
-
-`--all` **cannot** combine with `--output raw` or `--output table` — both are exit 1 naming the
-conflict. `table` can't size columns without seeing every row, so buffer with `--array` first;
-`raw` has nothing to keep, since pagination flattens each page's envelope into a record stream.
-
 For "how many are there", don't paginate at all — `sn aggregate <table> --count` answers in one
-request.
+request. The `--all`/`--array`/`--output` interactions are self-naming exit-1 errors.

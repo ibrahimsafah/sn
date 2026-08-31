@@ -85,11 +85,13 @@ get labels — and dates localized to the caller's timezone. A localized date fe
   requires `-q`; there is no bare "watch this table" form.
 - **`updateset back-out` and `app rollback` deserve a human.** One flag, instance-wide,
   asynchronous, no undo of their own — say what will be reverted before firing.
-- **Pipe secrets** (`--password-stdin`, `--client-secret-stdin`); argv is visible to `ps`.
+- **Pipe secrets** (`--password-stdin`, `--client-secret-stdin`, `--api-key-stdin`); argv is
+  visible to `ps`.
 - **Prefer `sn profile add` over `sn init`** — it emits JSON, never prompts off a TTY, and
   leaves `default_profile` alone.
 - **`authorization_code` OAuth is not agent-safe** — `sn profile login` opens a browser and blocks
-  on a human. `client_credentials` is headless. Data commands never open a browser.
+  on a human. `client_credentials` is headless; an API key (`--auth apikey`) is the simplest
+  headless setup of all. Data commands never open a browser.
 - **Journal has no write verb**: add a note with
   `sn table update incident <sys_id> --field work_notes="..."`.
 

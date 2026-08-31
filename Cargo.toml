@@ -38,7 +38,7 @@ clap_complete = "4"
 webbrowser = "1"
 comfy-table = "7"
 base64 = "0.22"
-sha2 = "0.10"
+sha2 = "0.11"
 getrandom = "0.2"
 # Blocking WebSocket for the AMB record watcher. Deliberately *not*
 # tokio-tungstenite: Bayeux's /meta/connect is a long-poll, not a heartbeat, so

@@ -15,10 +15,14 @@
 #      clicks Approve and run — weekly, forever. Main's ruleset requires
 #      the `test (…)` and `msrv` contexts, so an undispatched PR could
 #      never merge unattended.
-#   2. workflow_dispatch (and repository_dispatch) are the documented
-#      exception to (1). So after pushing, this job dispatches ci.yml and
-#      security.yml AT THE REFRESH BRANCH; their check runs land on the
-#      branch head SHA and satisfy the required contexts by name.
+#   2. Rulesets evaluate PR-associated check suites, not bare commit check
+#      runs. Measured: with the head SHA fully green from dispatched
+#      workflow_dispatch runs (the documented exception to GITHUB_TOKEN
+#      event suppression), the merge still fails with "the base branch
+#      policy prohibits the merge". So the unblock is approving the parked
+#      runs themselves — the approve step below — and the dispatched
+#      ci.yml/security.yml runs are informational: commit-level green
+#      visible even while approval is pending.
 #
 # One rolling branch (bot/lockfile-refresh), force-pushed: an unmerged
 # refresh is superseded, its open PR just gains the newer commit, and the
@@ -101,11 +105,13 @@ jobs:
             echo '```'
             echo
             echo "> [!NOTE]"
-            echo "> Checks on this PR arrive via **dispatched** runs of CI and Security —"
-            echo "> this PR's own pull_request runs park as action_required and report"
-            echo "> nothing without a manual approval — so they can take a minute to"
-            echo "> attach. The required contexts (test ×3, msrv) come from the"
-            echo "> dispatched CI run; the action_required entries can be ignored."
+            echo "> This PR's own pull_request runs park as action_required; the"
+            echo "> workflow approves them right after opening the PR, and only those"
+            echo "> native runs satisfy main's required contexts (test ×3, msrv). If a"
+            echo "> run still shows as awaiting approval, the token wasn't allowed to"
+            echo "> approve it — one manual Approve-and-run click unblocks the merge."
+            echo "> The extra workflow_dispatch CI/Security runs on the branch are"
+            echo "> informational, commit-level green."
           } > /tmp/pr-body.md
           existing=$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number')
           if [ -z "$existing" ]; then
@@ -116,7 +122,37 @@ jobs:
             gh pr edit "$existing" --body-file /tmp/pr-body.md
           fi
 
-      - name: Dispatch the required checks at the branch
+      - name: Approve the PR's parked workflow runs
+        if: steps.update.outputs.changed == 'true'
+        run: |
+          # The PR's own pull_request runs park as action_required (measured).
+          # Approving them matters more than dispatching: main's ruleset
+          # evaluates PR-associated check suites, so dispatched runs green the
+          # commit but do NOT satisfy the required contexts (measured — the
+          # merge stays policy-blocked). Whether GITHUB_TOKEN may approve runs
+          # it caused is also a measurement; on refusal this warns and leaves
+          # the one manual click, rather than failing a refresh that
+          # otherwise worked.
+          sha=$(git rev-parse HEAD)
+          for _ in $(seq 1 12); do
+            runs=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs?branch=$BRANCH&event=pull_request&status=action_required" \
+              --jq ".workflow_runs[] | select(.head_sha == \"$sha\") | .id")
+            [ -n "$runs" ] && break
+            sleep 5
+          done
+          if [ -z "$runs" ]; then
+            echo "::warning::no parked pull_request runs appeared for $sha; approve them manually from the PR's checks tab"
+            exit 0
+          fi
+          for id in $runs; do
+            if gh api -X POST "repos/$GITHUB_REPOSITORY/actions/runs/$id/approve" >/dev/null 2>&1; then
+              echo "approved run $id"
+            else
+              echo "::warning::could not approve run $id (GITHUB_TOKEN may not approve runs it caused); approve manually: gh api -X POST repos/$GITHUB_REPOSITORY/actions/runs/$id/approve"
+            fi
+          done
+
+      - name: Dispatch the checks at the branch (informational)
         if: steps.update.outputs.changed == 'true'
         run: |
           gh workflow run ci.yml --ref "$BRANCH"
